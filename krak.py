@@ -31,10 +31,15 @@ ADMINS = {
     6977407005,
 }
 
-DB_FILE = "star_otc.sqlite3"
+DB_FILE = "funpay.sqlite3"
 
-# Сколько дней средства находятся в удержании
 FREEZE_DAYS = 3
+
+BONUS_STARS = 200
+
+# Акция: 1–25 октября
+BONUS_START = (10, 1)
+BONUS_END = (10, 25)
 
 GIFT_RE = re.compile(
     r"^(?:https?://)?t\.me/nft/[^\s]+$",
@@ -45,10 +50,13 @@ PRICE_RE = re.compile(
     r"^[1-9][0-9]*$"
 )
 
+CURRENCIES = {
+    "RUB": "₽",
+    "GRAM": "Gram",
+    "STARS": "Stars",
+    "USDT": "USDT",
+}
 
-# ============================================================
-# ПРОВЕРКА ТОКЕНА
-# ============================================================
 
 if not BOT_TOKEN:
     raise RuntimeError(
@@ -96,10 +104,6 @@ def now_iso():
 
 
 def display_datetime():
-    """
-    Время для сообщений пользователям.
-    Используется локальное время сервера.
-    """
     return datetime.now().strftime("%d.%m.%Y %H:%M:%S")
 
 
@@ -107,44 +111,48 @@ def init_db():
 
     with db() as conn:
 
-        # ----------------------------------------------------
-        # USERS
-        # ----------------------------------------------------
-
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 first_name TEXT,
+
                 balance INTEGER NOT NULL DEFAULT 0,
                 held_balance INTEGER NOT NULL DEFAULT 0,
+
+                gram_balance INTEGER NOT NULL DEFAULT 0,
+                gram_held_balance INTEGER NOT NULL DEFAULT 0,
+
+                stars_balance INTEGER NOT NULL DEFAULT 0,
+                stars_held_balance INTEGER NOT NULL DEFAULT 0,
+
+                usdt_balance INTEGER NOT NULL DEFAULT 0,
+                usdt_held_balance INTEGER NOT NULL DEFAULT 0,
+
                 first_paid_at TEXT,
+                bonus_claimed INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             )
         """)
 
-        # ----------------------------------------------------
-        # DEALS
-        # ----------------------------------------------------
-
         conn.execute("""
             CREATE TABLE IF NOT EXISTS deals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT,
+                code TEXT UNIQUE,
                 creator_id INTEGER NOT NULL,
                 payer_id INTEGER,
+
                 gift_url TEXT NOT NULL,
                 amount INTEGER NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'RUB',
+
                 status TEXT NOT NULL DEFAULT 'pending',
+
                 created_at TEXT NOT NULL,
                 paid_at TEXT,
                 confirmed_at TEXT
             )
         """)
-
-        # ----------------------------------------------------
-        # OPERATIONS
-        # ----------------------------------------------------
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS operations (
@@ -152,14 +160,11 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 kind TEXT NOT NULL,
                 amount INTEGER NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'RUB',
                 deal_id INTEGER,
                 created_at TEXT NOT NULL
             )
         """)
-
-        # ----------------------------------------------------
-        # SUPPORT
-        # ----------------------------------------------------
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS support_requests (
@@ -169,18 +174,12 @@ def init_db():
             )
         """)
 
-        # ----------------------------------------------------
-        # HOLDS
-        #
-        # Суммы, которые уже подтверждены продавцом,
-        # но находятся на удержании 3 дня.
-        # ----------------------------------------------------
-
         conn.execute("""
             CREATE TABLE IF NOT EXISTS balance_holds (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 amount INTEGER NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'RUB',
                 deal_id INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 release_at TEXT NOT NULL,
@@ -188,45 +187,78 @@ def init_db():
             )
         """)
 
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS deposit_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                currency TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS withdrawal_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                currency TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL
+            )
+        """)
+
         # ====================================================
         # MIGRATIONS
         # ====================================================
 
-        # ----------------------------------------------------
-        # USERS
-        # ----------------------------------------------------
-
-        user_columns = conn.execute(
-            "PRAGMA table_info(users)"
-        ).fetchall()
-
-        user_column_names = {
-            column["name"]
-            for column in user_columns
+        columns = {
+            x["name"]
+            for x in conn.execute(
+                "PRAGMA table_info(users)"
+            ).fetchall()
         }
 
-        if "held_balance" not in user_column_names:
+        migrations = {
+            "held_balance":
+                "ALTER TABLE users ADD COLUMN held_balance INTEGER NOT NULL DEFAULT 0",
 
-            conn.execute("""
-                ALTER TABLE users
-                ADD COLUMN held_balance INTEGER NOT NULL DEFAULT 0
-            """)
+            "gram_balance":
+                "ALTER TABLE users ADD COLUMN gram_balance INTEGER NOT NULL DEFAULT 0",
 
-        # ----------------------------------------------------
-        # DEALS
-        # ----------------------------------------------------
+            "gram_held_balance":
+                "ALTER TABLE users ADD COLUMN gram_held_balance INTEGER NOT NULL DEFAULT 0",
 
-        deal_columns = conn.execute(
-            "PRAGMA table_info(deals)"
-        ).fetchall()
+            "stars_balance":
+                "ALTER TABLE users ADD COLUMN stars_balance INTEGER NOT NULL DEFAULT 0",
 
-        deal_column_names = {
-            column["name"]
-            for column in deal_columns
+            "stars_held_balance":
+                "ALTER TABLE users ADD COLUMN stars_held_balance INTEGER NOT NULL DEFAULT 0",
+
+            "usdt_balance":
+                "ALTER TABLE users ADD COLUMN usdt_balance INTEGER NOT NULL DEFAULT 0",
+
+            "usdt_held_balance":
+                "ALTER TABLE users ADD COLUMN usdt_held_balance INTEGER NOT NULL DEFAULT 0",
+
+            "bonus_claimed":
+                "ALTER TABLE users ADD COLUMN bonus_claimed INTEGER NOT NULL DEFAULT 0",
         }
 
-        if "code" not in deal_column_names:
+        for column, sql in migrations.items():
 
+            if column not in columns:
+                conn.execute(sql)
+
+        deal_columns = {
+            x["name"]
+            for x in conn.execute(
+                "PRAGMA table_info(deals)"
+            ).fetchall()
+        }
+
+        if "code" not in deal_columns:
             conn.execute(
                 "ALTER TABLE deals ADD COLUMN code TEXT"
             )
@@ -248,11 +280,16 @@ def init_db():
                     deal["id"]
                 ))
 
-        if "confirmed_at" not in deal_column_names:
-
+        if "confirmed_at" not in deal_columns:
             conn.execute("""
                 ALTER TABLE deals
                 ADD COLUMN confirmed_at TEXT
+            """)
+
+        if "currency" not in deal_columns:
+            conn.execute("""
+                ALTER TABLE deals
+                ADD COLUMN currency TEXT NOT NULL DEFAULT 'RUB'
             """)
 
         conn.execute("""
@@ -273,7 +310,7 @@ def generate_deal_code(conn):
 
     while True:
 
-        code = "ST-" + "".join(
+        code = "FP-" + "".join(
             secrets.choice(alphabet)
             for _ in range(6)
         )
@@ -328,11 +365,9 @@ def ensure_user(user):
                     user_id,
                     username,
                     first_name,
-                    balance,
-                    held_balance,
                     created_at
                 )
-                VALUES (?, ?, ?, 0, 0, ?)
+                VALUES (?, ?, ?, ?)
             """, (
                 user.id,
                 user.username,
@@ -343,43 +378,83 @@ def ensure_user(user):
         conn.commit()
 
 
-def get_balance(user_id):
+# ============================================================
+# BALANCES
+# ============================================================
+
+def balance_column(currency):
+    return {
+        "RUB": "balance",
+        "GRAM": "gram_balance",
+        "STARS": "stars_balance",
+        "USDT": "usdt_balance",
+    }[currency]
+
+
+def held_column(currency):
+    return {
+        "RUB": "held_balance",
+        "GRAM": "gram_held_balance",
+        "STARS": "stars_held_balance",
+        "USDT": "usdt_held_balance",
+    }[currency]
+
+
+def get_balance(user_id, currency="RUB"):
 
     release_expired_holds()
 
+    column = balance_column(currency)
+
     with db() as conn:
 
-        row = conn.execute("""
-            SELECT balance
+        row = conn.execute(
+            f"""
+            SELECT {column}
             FROM users
             WHERE user_id = ?
-        """, (
-            user_id,
-        )).fetchone()
+            """,
+            (user_id,)
+        ).fetchone()
 
         if not row:
             return 0
 
-        return int(row["balance"])
+        return int(row[column])
 
 
-def get_held_balance(user_id):
+def get_held_balance(user_id, currency="RUB"):
+
+    column = held_column(currency)
 
     with db() as conn:
 
-        row = conn.execute("""
-            SELECT held_balance
+        row = conn.execute(
+            f"""
+            SELECT {column}
             FROM users
             WHERE user_id = ?
-        """, (
-            user_id,
-        )).fetchone()
+            """,
+            (user_id,)
+        ).fetchone()
 
         if not row:
             return 0
 
-        return int(row["held_balance"])
+        return int(row[column])
 
+
+def fmt(amount):
+    return f"{int(amount):,}".replace(",", " ")
+
+
+def currency_name(currency):
+    return CURRENCIES.get(currency, currency)
+
+
+# ============================================================
+# ACTIVE DEALS
+# ============================================================
 
 def get_active_deals_count(user_id):
 
@@ -397,22 +472,63 @@ def get_active_deals_count(user_id):
         return int(row["count"])
 
 
-def get_first_paid_at(user_id):
+# ============================================================
+# BONUS
+# ============================================================
+
+def bonus_available():
+
+    now = datetime.now()
+
+    if now.month != BONUS_START[0]:
+        return False
+
+    return BONUS_START[1] <= now.day <= BONUS_END[1]
+
+
+def user_completed_deal(user_id):
 
     with db() as conn:
 
         row = conn.execute("""
-            SELECT first_paid_at
+            SELECT id
+            FROM deals
+            WHERE status = 'confirmed'
+            AND (
+                creator_id = ?
+                OR payer_id = ?
+            )
+            LIMIT 1
+        """, (
+            user_id,
+            user_id
+        )).fetchone()
+
+        return bool(row)
+
+
+def can_claim_bonus(user_id):
+
+    if not bonus_available():
+        return False
+
+    with db() as conn:
+
+        user = conn.execute("""
+            SELECT bonus_claimed
             FROM users
             WHERE user_id = ?
         """, (
             user_id,
         )).fetchone()
 
-        if not row:
-            return None
+        if not user:
+            return False
 
-        return row["first_paid_at"]
+        if int(user["bonus_claimed"]) == 1:
+            return False
+
+    return user_completed_deal(user_id)
 
 
 # ============================================================
@@ -434,7 +550,6 @@ def release_expired_holds():
         for hold in holds:
 
             try:
-
                 release_at = datetime.fromisoformat(
                     hold["release_at"]
                 )
@@ -445,12 +560,10 @@ def release_expired_holds():
                     )
 
             except Exception:
-
                 logging.exception(
                     "Ошибка даты удержания %s",
                     hold["id"]
                 )
-
                 continue
 
             if now < release_at:
@@ -458,31 +571,33 @@ def release_expired_holds():
 
             amount = int(hold["amount"])
             user_id = int(hold["user_id"])
+            currency = hold["currency"]
 
-            # Переводим из удержания
-            # в обычный баланс
+            balance_col = balance_column(currency)
+            held_col = held_column(currency)
 
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                f"""
                 UPDATE users
                 SET
-                    held_balance = held_balance - ?,
-                    balance = balance + ?
+                    {held_col} = {held_col} - ?,
+                    {balance_col} = {balance_col} + ?
                 WHERE user_id = ?
-                AND held_balance >= ?
-            """, (
-                amount,
-                amount,
-                user_id,
-                amount
-            ))
+                AND {held_col} >= ?
+                """,
+                (
+                    amount,
+                    amount,
+                    user_id,
+                    amount
+                )
+            )
 
             if cursor.rowcount != 1:
-
                 logging.error(
                     "Не удалось освободить удержание %s",
                     hold["id"]
                 )
-
                 continue
 
             conn.execute("""
@@ -498,14 +613,16 @@ def release_expired_holds():
                     user_id,
                     kind,
                     amount,
+                    currency,
                     deal_id,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 user_id,
                 "hold_released",
                 amount,
+                currency,
                 hold["deal_id"],
                 now_iso()
             ))
@@ -521,9 +638,8 @@ async def release_holds_loop():
             release_expired_holds()
 
         except Exception:
-
             logging.exception(
-                "Ошибка автоматического освобождения средств"
+                "Ошибка освобождения удержаний"
             )
 
         await asyncio.sleep(60)
@@ -549,14 +665,10 @@ def clear_state(user_id):
 
 
 # ============================================================
-# KEYBOARD BUTTON HELPER
+# BUTTON
 # ============================================================
 
-def button(
-    text,
-    callback_data,
-    style=None
-):
+def button(text, callback_data, style=None):
 
     return InlineKeyboardButton(
         text=text,
@@ -566,7 +678,7 @@ def button(
 
 
 # ============================================================
-# KEYBOARDS
+# MAIN KEYBOARD
 # ============================================================
 
 def main_keyboard():
@@ -582,21 +694,28 @@ def main_keyboard():
             ],
             [
                 button(
-                    "❇️ Кошелек ❇️",
+                    "Кошелек",
                     "menu:wallet",
                     "success"
                 )
             ],
             [
                 button(
-                    "💡 О сервисе 💡",
+                    "Бонусы",
+                    "menu:bonus",
+                    "success"
+                )
+            ],
+            [
+                button(
+                    "О сервисе",
                     "menu:about",
                     "success"
                 )
             ],
             [
                 button(
-                    "🛟 Поддержка 🛟",
+                    "Поддержка",
                     "menu:support",
                     "success"
                 )
@@ -620,20 +739,58 @@ def back_keyboard():
     )
 
 
+# ============================================================
+# CURRENCY KEYBOARDS
+# ============================================================
+
+def deposit_currency_keyboard():
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                button("₽", "deposit:currency:RUB", "primary"),
+                button("Gram", "deposit:currency:GRAM", "primary"),
+                button("Stars", "deposit:currency:STARS", "primary"),
+                button("Usdt", "deposit:currency:USDT", "primary"),
+            ],
+            [
+                button("Выйти", "menu:home", "danger")
+            ]
+        ]
+    )
+
+
+def withdraw_currency_keyboard():
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                button("↗️ ₽", "withdraw:currency:RUB", "primary"),
+                button("Gram", "withdraw:currency:GRAM", "primary"),
+                button("Stars", "withdraw:currency:STARS", "primary"),
+                button("Usdt", "withdraw:currency:USDT", "primary"),
+            ],
+            [
+                button("Выйти", "menu:home", "danger")
+            ]
+        ]
+    )
+
+
 def wallet_keyboard():
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 button(
-                    "✳️ Вывод ✳️",
+                    "↗️ Вывод",
                     "wallet:withdraw",
                     "primary"
                 )
             ],
             [
                 button(
-                    "📁 Пополнение 📁",
+                    "🔶 Пополнение",
                     "wallet:deposit",
                     "success"
                 )
@@ -649,13 +806,17 @@ def wallet_keyboard():
     )
 
 
+# ============================================================
+# SUPPORT KEYBOARDS
+# ============================================================
+
 def support_keyboard():
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 button(
-                    "🛟 Написать оператору",
+                    "Написать в поддержку",
                     "support:operator",
                     "primary"
                 )
@@ -670,6 +831,10 @@ def support_keyboard():
         ]
     )
 
+
+# ============================================================
+# DEAL KEYBOARD
+# ============================================================
 
 def deal_keyboard():
 
@@ -692,23 +857,8 @@ def confirm_deal_keyboard(deal_id):
         inline_keyboard=[
             [
                 button(
-                    "🔷 ПОДТВЕРДИТЬ 🔷",
+                    "ПОДТВЕРДИТЬ",
                     f"deal:confirm:{deal_id}",
-                    "primary"
-                )
-            ]
-        ]
-    )
-
-
-def admin_reply_keyboard(user_id):
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                button(
-                    "💬 Ответить",
-                    f"support:reply:{user_id}",
                     "primary"
                 )
             ]
@@ -721,8 +871,8 @@ def admin_reply_keyboard(user_id):
 # ============================================================
 
 async def safe_edit(
-    callback: CallbackQuery,
-    text: str,
+    callback,
+    text,
     keyboard=None
 ):
 
@@ -746,23 +896,26 @@ async def safe_edit(
 async def show_home(target, user):
 
     ensure_user(user)
-
     release_expired_holds()
 
-    balance = get_balance(user.id)
-    held_balance = get_held_balance(user.id)
-    active_deals = get_active_deals_count(user.id)
+    rub = get_balance(user.id, "RUB")
+    gram = get_balance(user.id, "GRAM")
+    stars = get_balance(user.id, "STARS")
+    usdt = get_balance(user.id, "USDT")
 
-    balance_text = f"{balance:,}".replace(",", " ")
-    held_text = f"{held_balance:,}".replace(",", " ")
+    held = get_held_balance(user.id, "RUB")
+    active = get_active_deals_count(user.id)
 
     text = (
-        "⭐ *Добро пожаловать!*\n\n"
-        "Здесь вы можете безопасно создавать сделки, "
-        "обмениваться ссылками и управлять своим балансом.\n\n"
-        f"💰 Баланс: *{balance_text}* ₽\n"
-        f"❄️ На удержании: *{held_text}* ₽\n"
-        f"📁 Активных сделок: *{active_deals}*\n\n"
+        "🔷 *Добро пожаловать на FunPay!*\n\n"
+        "Здесь вы можете безопасно создавать сделки "
+        "и управлять своим балансом.\n\n"
+        f"Баланс: {fmt(rub)} ₽\n\n"
+        f"~ {fmt(stars)} Telegram Stars\n"
+        f"~ {fmt(gram)} Gram\n"
+        f"~ {fmt(usdt)} Usdt\n\n"
+        f"❄️ На удержании: {fmt(held)} ₽\n"
+        f"🔁 Активных сделок: {active}\n\n"
         "Выберите нужный раздел ниже 👇"
     )
 
@@ -799,11 +952,11 @@ async def cmd_start(message: Message):
 
 
 # ============================================================
-# HOME CALLBACK
+# HOME
 # ============================================================
 
 @dp.callback_query(F.data == "menu:home")
-async def callback_home(callback: CallbackQuery):
+async def callback_home(callback):
 
     ensure_user(callback.from_user)
     clear_state(callback.from_user.id)
@@ -821,7 +974,7 @@ async def callback_home(callback: CallbackQuery):
 # ============================================================
 
 @dp.callback_query(F.data == "menu:create")
-async def callback_create(callback: CallbackQuery):
+async def callback_create(callback):
 
     ensure_user(callback.from_user)
 
@@ -834,7 +987,7 @@ async def callback_create(callback: CallbackQuery):
 
     await safe_edit(
         callback,
-        "📒 Пришлите ссылку на подарок\n\n"
+        "Пришлите ссылку на подарок.\n\n"
         "Ссылка должна начинаться с:\n"
         "`t.me/nft/...`",
         back_keyboard()
@@ -842,37 +995,40 @@ async def callback_create(callback: CallbackQuery):
 
 
 # ============================================================
-# GIFT LINK
+# GIFT
 # ============================================================
 
-async def process_gift_link(message: Message):
+async def process_gift_link(message):
 
     value = message.text.strip()
 
     if not GIFT_RE.fullmatch(value):
 
-        error_message = await message.answer(
-            "❌ Ссылка указана неверно.\n\n"
-            "Ссылка должна начинаться с:\n"
+        error = await message.answer(
+            "Ссылка указана неверно.\n\n"
+            "Используйте формат:\n"
             "`t.me/nft/...`"
         )
 
         await asyncio.sleep(2)
 
         try:
-            await error_message.delete()
+            await error.delete()
         except Exception:
             pass
 
         return
 
-    user_states[message.from_user.id] = {
-        "state": "waiting_price",
-        "gift_url": value
-    }
+    set_state(
+        message.from_user.id,
+        {
+            "state": "waiting_price",
+            "gift_url": value
+        }
+    )
 
     await message.answer(
-        "🪙 Выберите цену сделки в рублях целым числом"
+        "Выберите цену сделки в рублях целым числом."
     )
 
 
@@ -880,53 +1036,51 @@ async def process_gift_link(message: Message):
 # PRICE
 # ============================================================
 
-async def process_price(message: Message):
+async def process_price(message):
 
-    state = user_states.get(message.from_user.id)
+    state = get_state(message.from_user.id)
 
     if not isinstance(state, dict):
-
         clear_state(message.from_user.id)
-
         return
 
     value = message.text.strip()
 
     if not PRICE_RE.fullmatch(value):
 
-        error_message = await message.answer(
-            "❌ Цена должна быть целым числом больше 0."
+        error = await message.answer(
+            "Цена должна быть целым числом больше 0."
         )
 
         await asyncio.sleep(2)
 
         try:
-            await error_message.delete()
+            await error.delete()
         except Exception:
             pass
 
         return
 
     amount = int(value)
-
     gift_url = state["gift_url"]
 
     with db() as conn:
 
-        deal_code = generate_deal_code(conn)
+        code = generate_deal_code(conn)
 
-        cursor = conn.execute("""
+        conn.execute("""
             INSERT INTO deals (
                 code,
                 creator_id,
                 gift_url,
                 amount,
+                currency,
                 status,
                 created_at
             )
-            VALUES (?, ?, ?, ?, 'pending', ?)
+            VALUES (?, ?, ?, ?, 'RUB', 'pending', ?)
         """, (
-            deal_code,
+            code,
             message.from_user.id,
             gift_url,
             amount,
@@ -937,18 +1091,12 @@ async def process_price(message: Message):
 
     clear_state(message.from_user.id)
 
-    amount_text = f"{amount:,}".replace(",", " ")
-
-    deal_text = (
-        "〽️ *СДЕЛКА STAR OTC* 〽️\n\n"
-        f"*{gift_url}*\n"
-        f"*{amount_text}* ₽\n\n"
-        f"🔑 Код сделки: `{deal_code}`\n\n"
-        "🪙 Передайте этот код покупателю для оплаты сделки"
-    )
-
     await message.answer(
-        deal_text,
+        "🔷 *СДЕЛКА FUNPAY* 🔷\n\n"
+        f"{gift_url}\n"
+        f"{fmt(amount)} ₽\n\n"
+        f"Код сделки: `{code}`\n\n"
+        "Передайте код покупателю для оплаты сделки.",
         reply_markup=deal_keyboard()
     )
 
@@ -958,30 +1106,31 @@ async def process_price(message: Message):
 # ============================================================
 
 @dp.callback_query(F.data == "menu:wallet")
-async def callback_wallet(callback: CallbackQuery):
+async def callback_wallet(callback):
 
     ensure_user(callback.from_user)
     clear_state(callback.from_user.id)
 
     release_expired_holds()
 
-    balance = get_balance(callback.from_user.id)
-    held_balance = get_held_balance(callback.from_user.id)
+    rub = get_balance(callback.from_user.id, "RUB")
+    gram = get_balance(callback.from_user.id, "GRAM")
+    stars = get_balance(callback.from_user.id, "STARS")
+    usdt = get_balance(callback.from_user.id, "USDT")
 
-    balance_text = f"{balance:,}".replace(",", " ")
-    held_text = f"{held_balance:,}".replace(",", " ")
-
-    # --------------------------------------------------------
-    # История операций специально не показывается.
-    # --------------------------------------------------------
+    held = get_held_balance(
+        callback.from_user.id,
+        "RUB"
+    )
 
     text = (
-        "💰 *Ваш кошелёк*\n\n"
-        f"Доступно: *{balance_text}* ₽\n"
-        f"❄️ На удержании: *{held_text}* ₽\n\n"
-        "📜 *История операций*\n"
-        "Истории операций пока нет.\n\n"
-        "Выберите действие ниже 👇"
+        "*Кошелек FunPay*\n\n"
+        f"₽ {fmt(rub)}\n"
+        f"Gram {fmt(gram)}\n"
+        f"Stars {fmt(stars)}\n"
+        f"Usdt {fmt(usdt)}\n\n"
+        f"❄️ На удержании: {fmt(held)} ₽\n\n"
+        "Выберите действие."
     )
 
     await callback.answer()
@@ -994,36 +1143,322 @@ async def callback_wallet(callback: CallbackQuery):
 
 
 # ============================================================
-# ABOUT
+# DEPOSIT
 # ============================================================
 
-@dp.callback_query(F.data == "menu:about")
-async def callback_about(callback: CallbackQuery):
+@dp.callback_query(F.data == "wallet:deposit")
+async def callback_deposit(callback):
+
+    clear_state(callback.from_user.id)
+
+    await callback.answer()
+
+    await safe_edit(
+        callback,
+        "*Пополнение*\n\n"
+        "Выберите валюту для пополнения:",
+        deposit_currency_keyboard()
+    )
+
+
+@dp.callback_query(
+    F.data.startswith("deposit:currency:")
+)
+async def callback_deposit_currency(callback):
+
+    currency = callback.data.split(":")[-1]
+
+    if currency not in CURRENCIES:
+
+        await callback.answer(
+            "Неизвестная валюта.",
+            show_alert=True
+        )
+        return
+
+    set_state(
+        callback.from_user.id,
+        {
+            "state": "deposit_amount",
+            "currency": currency
+        }
+    )
+
+    await callback.answer()
+
+    await safe_edit(
+        callback,
+        f"Пополнение: *{currency_name(currency)}*\n\n"
+        "Введите желаемую сумму целым числом.",
+        back_keyboard()
+    )
+
+
+# ============================================================
+# WITHDRAW
+# ============================================================
+
+@dp.callback_query(F.data == "wallet:withdraw")
+async def callback_withdraw(callback):
+
+    clear_state(callback.from_user.id)
+
+    await callback.answer()
+
+    await safe_edit(
+        callback,
+        "*Вывод средств*\n\n"
+        "Выберите валюту:",
+        withdraw_currency_keyboard()
+    )
+
+
+@dp.callback_query(
+    F.data.startswith("withdraw:currency:")
+)
+async def callback_withdraw_currency(callback):
+
+    currency = callback.data.split(":")[-1]
+
+    if currency not in CURRENCIES:
+
+        await callback.answer(
+            "Неизвестная валюта.",
+            show_alert=True
+        )
+        return
+
+    balance = get_balance(
+        callback.from_user.id,
+        currency
+    )
+
+    set_state(
+        callback.from_user.id,
+        {
+            "state": "withdraw_amount",
+            "currency": currency
+        }
+    )
+
+    await callback.answer()
+
+    await safe_edit(
+        callback,
+        f"Вывод: *{currency_name(currency)}*\n\n"
+        f"Доступно: *{fmt(balance)}* {currency_name(currency)}\n\n"
+        "Введите сумму вывода целым числом.",
+        back_keyboard()
+    )
+
+
+# ============================================================
+# BONUS
+# ============================================================
+
+def bonus_keyboard(user_id):
+
+    claimed = False
+
+    with db() as conn:
+
+        row = conn.execute("""
+            SELECT bonus_claimed
+            FROM users
+            WHERE user_id = ?
+        """, (
+            user_id,
+        )).fetchone()
+
+        if row:
+            claimed = bool(row["bonus_claimed"])
+
+    if claimed:
+
+        text = "Забрано"
+
+    elif user_completed_deal(user_id):
+
+        text = "Забрать приз (1/1)"
+
+    else:
+
+        text = "Забрать приз (0/1)"
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                button(
+                    text,
+                    "bonus:claim",
+                    "primary"
+                )
+            ],
+            [
+                button(
+                    "Выйти",
+                    "menu:home",
+                    "danger"
+                )
+            ]
+        ]
+    )
+
+
+@dp.callback_query(F.data == "menu:bonus")
+async def callback_bonus(callback):
 
     clear_state(callback.from_user.id)
 
     text = (
-        "✨ *О нашем сервисе*\n\n"
-        "Всё началось с простой идеи — сделать сделки "
-        "между людьми понятнее и удобнее.\n\n"
-        "Когда между двумя пользователями происходит "
-        "обмен, всегда остаются вопросы: кто отправит первым, "
-        "где хранить деньги, как передать ссылку и что делать, "
-        "если что-то пошло не так.\n\n"
-        "Мы решили собрать всё необходимое в одном месте.\n\n"
-        "🤝 *Создание сделки*\n"
-        "Создайте сделку, укажите условия и передайте "
-        "код второй стороне.\n\n"
-        "🔗 *Сделки по коду*\n"
-        "Не нужно искать пользователя вручную — достаточно "
-        "передать код сделки.\n\n"
-        "💰 *Кошелёк*\n"
-        "Баланс отображается в рублях. Пополнение и вывод "
-        "находятся в одном разделе.\n\n"
-        "🛟 *Поддержка*\n"
-        "Если возник вопрос или проблема со сделкой, "
-        "можно обратиться в поддержку.\n\n"
-        "Спасибо, что пользуетесь сервисом, ваш StarsOtc ❤️"
+        "💥 *ОКТЯБРЬ НА FUNPAY* "
+        "(С 1 по 25 октября)\n\n"
+        "Проведи свою первую сделку на FunPay "
+        "и получи +200 ⭐ Telegram Stars!\n\n"
+        "Чтобы получить приз:\n\n"
+        "• Создай или соверши первую сделку\n"
+        "• Успешно заверши её\n"
+        "• Получи 200 ⭐ Stars в подарок в этом меню\n\n"
+        "🔥 Отличный повод попробовать FunPay прямо сейчас!"
+    )
+
+    await callback.answer()
+
+    await safe_edit(
+        callback,
+        text,
+        bonus_keyboard(callback.from_user.id)
+    )
+
+
+@dp.callback_query(F.data == "bonus:claim")
+async def callback_bonus_claim(callback):
+
+    user_id = callback.from_user.id
+
+    with db() as conn:
+
+        user = conn.execute("""
+            SELECT bonus_claimed
+            FROM users
+            WHERE user_id = ?
+        """, (
+            user_id,
+        )).fetchone()
+
+        if not user:
+
+            await callback.answer(
+                "Пользователь не найден.",
+                show_alert=True
+            )
+            return
+
+        if user["bonus_claimed"]:
+
+            await callback.answer(
+                "Вы уже получили этот бонус.",
+                show_alert=True
+            )
+            return
+
+        if not bonus_available():
+
+            await callback.answer(
+                "Акция сейчас недоступна.",
+                show_alert=True
+            )
+            return
+
+        completed = conn.execute("""
+            SELECT id
+            FROM deals
+            WHERE status = 'confirmed'
+            AND (
+                creator_id = ?
+                OR payer_id = ?
+            )
+            LIMIT 1
+        """, (
+            user_id,
+            user_id
+        )).fetchone()
+
+        if not completed:
+
+            await callback.answer(
+                "Сначала успешно завершите первую сделку.",
+                show_alert=True
+            )
+            return
+
+        conn.execute("""
+            UPDATE users
+            SET
+                stars_balance = stars_balance + ?,
+                bonus_claimed = 1
+            WHERE user_id = ?
+            AND bonus_claimed = 0
+        """, (
+            BONUS_STARS,
+            user_id
+        ))
+
+        conn.execute("""
+            INSERT INTO operations (
+                user_id,
+                kind,
+                amount,
+                currency,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            "october_bonus",
+            BONUS_STARS,
+            "STARS",
+            now_iso()
+        ))
+
+        conn.commit()
+
+    await callback.answer(
+        "Вы получили 200 Stars!",
+        show_alert=True
+    )
+
+    await safe_edit(
+        callback,
+        "💥 *ОКТЯБРЬ НА FUNPAY*\n\n"
+        "Бонус успешно получен.\n\n"
+        "На ваш баланс начислено:\n"
+        "*+200 ⭐ Telegram Stars*\n\n"
+        "Повторно получить бонус нельзя.",
+        bonus_keyboard(user_id)
+    )
+
+
+# ============================================================
+# ABOUT
+# ============================================================
+
+@dp.callback_query(F.data == "menu:about")
+async def callback_about(callback):
+
+    clear_state(callback.from_user.id)
+
+    text = (
+        "*FunPay*\n\n"
+        "Сервис для безопасной торговли NFT "
+        "и цифровыми товарами в Telegram.\n\n"
+        "Создавайте сделки, покупайте и продавайте NFT, "
+        "проводите оплату через удобную систему "
+        "и взаимодействуйте с другими пользователями.\n\n"
+        "FunPay объединяет покупателей и продавцов "
+        "в одном месте, помогая сделать торговлю "
+        "простой, быстрой и удобной.\n\n"
+        "Все основные операции доступны прямо в Telegram."
     )
 
     await callback.answer()
@@ -1040,26 +1475,16 @@ async def callback_about(callback: CallbackQuery):
 # ============================================================
 
 @dp.callback_query(F.data == "menu:support")
-async def callback_support(callback: CallbackQuery):
+async def callback_support(callback):
 
     clear_state(callback.from_user.id)
 
     text = (
-        "🛟 *Здесь вы можете задать вопросы или прочитать "
-        "ответы на уже решённые вопросы*\n\n"
-        "🔐 *Насколько безопасны сделки?*\n\n"
-        "Мы стараемся сделать процесс сделки максимально "
-        "понятным и защищённым: информация о сделке "
-        "фиксируется в системе, а её статус можно "
-        "отслеживать в боте.\n\n"
-        "🛡 *Что будет, если второй участник не выполнит условия?*\n\n"
-        "Не подтверждайте завершение сделки, пока не убедились, "
-        "что условия действительно выполнены. Если возникла "
-        "спорная ситуация, обратитесь в поддержку и предоставьте "
-        "код сделки и необходимые материалы.\n\n"
-        "👤 *Можно ли доверять человеку, с которым я заключаю сделку?*\n\n"
-        "Пользователи которые оплачивают проходят проверку "
-        "телеграмма на содержание в скам базах."
+        "*Поддержка FunPay*\n\n"
+        "Здесь вы можете задать вопрос оператору "
+        "или обратиться по поводу сделки.\n\n"
+        "Если проблема связана со сделкой, "
+        "укажите её код и подробно опишите ситуацию."
     )
 
     await callback.answer()
@@ -1071,96 +1496,73 @@ async def callback_support(callback: CallbackQuery):
     )
 
 
-# ============================================================
-# SUPPORT OPERATOR
-# ============================================================
-
 @dp.callback_query(F.data == "support:operator")
-async def callback_operator(callback: CallbackQuery):
+async def callback_operator(callback):
 
     user = callback.from_user
 
     ensure_user(user)
 
-    with db() as conn:
-
-        conn.execute("""
-            INSERT INTO support_requests (
-                user_id,
-                created_at
-            )
-            VALUES (?, ?)
-        """, (
-            user.id,
-            now_iso()
-        ))
-
-        conn.commit()
-
-    await callback.answer(
-        "Заявка отправлена оператору.",
-        show_alert=True
+    set_state(
+        user.id,
+        "support_message"
     )
 
-    for admin_id in ADMINS:
+    await callback.answer()
 
-        try:
-
-            username = (
-                f"@{user.username}"
-                if user.username
-                else "без username"
-            )
-
-            await bot.send_message(
-                admin_id,
-                "🛟 *Новая заявка в поддержку*\n\n"
-                f"👤 Пользователь: {username}\n"
-                f"🆔 ID: `{user.id}`\n"
-                f"🕐 Время: `{display_datetime()}`",
-                reply_markup=admin_reply_keyboard(user.id)
-            )
-
-        except Exception:
-
-            logging.exception(
-                "Не удалось уведомить администратора"
-            )
+    await safe_edit(
+        callback,
+        "*Сообщение в поддержку*\n\n"
+        "Напишите ваше сообщение следующим сообщением.\n\n"
+        "Оно будет передано операторам FunPay.",
+        back_keyboard()
+    )
 
 
 # ============================================================
-# ADMIN REPLY BUTTON
+# ADMIN SUPPORT
 # ============================================================
+
+def admin_reply_keyboard(user_id):
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                button(
+                    "Ответить",
+                    f"support:reply:{user_id}",
+                    "primary"
+                )
+            ]
+        ]
+    )
+
 
 @dp.callback_query(
     F.data.startswith("support:reply:")
 )
-async def callback_support_reply(callback: CallbackQuery):
+async def callback_support_reply(callback):
 
     admin_id = callback.from_user.id
 
     if admin_id not in ADMINS:
 
         await callback.answer(
-            "❌ У вас нет доступа.",
+            "У вас нет доступа.",
             show_alert=True
         )
-
         return
 
     try:
-
         user_id = int(
             callback.data.split(":")[-1]
         )
-
     except ValueError:
 
         await callback.answer(
-            "❌ Ошибка пользователя.",
+            "Ошибка пользователя.",
             show_alert=True
         )
-
         return
 
     set_state(
@@ -1175,28 +1577,25 @@ async def callback_support_reply(callback: CallbackQuery):
 
     await bot.send_message(
         admin_id,
-        "💬 *Введите сообщение для пользователя.*\n\n"
-        "Следующее текстовое сообщение будет отправлено "
-        "ему от имени администрации.\n\n"
-        "Для отмены напишите `/cancel`."
+        "*Введите ответ пользователю.*\n\n"
+        "Следующее сообщение будет отправлено ему.\n\n"
+        "Для отмены: `/cancel`"
     )
 
 
 # ============================================================
-# CANCEL STATE
+# CANCEL
 # ============================================================
 
 @dp.message(Command("cancel"))
-async def cmd_cancel(message: Message):
+async def cmd_cancel(message):
 
-    user_id = message.from_user.id
+    if get_state(message.from_user.id):
 
-    if get_state(user_id):
-
-        clear_state(user_id)
+        clear_state(message.from_user.id)
 
         await message.answer(
-            "✅ Действие отменено."
+            "Действие отменено."
         )
 
     else:
@@ -1207,10 +1606,10 @@ async def cmd_cancel(message: Message):
 
 
 # ============================================================
-# ADMIN SUPPORT MESSAGE
+# ADMIN MESSAGE
 # ============================================================
 
-async def process_admin_support_reply(message: Message):
+async def process_admin_support_reply(message):
 
     admin_id = message.from_user.id
 
@@ -1232,143 +1631,332 @@ async def process_admin_support_reply(message: Message):
 
         await bot.send_message(
             target_user_id,
-            "🛟 *Ответ администрации*\n\n"
+            "*Ответ поддержки FunPay*\n\n"
             f"{message.text}"
         )
 
         await message.answer(
-            "✅ Сообщение отправлено пользователю."
+            "Сообщение отправлено."
         )
 
     except Exception:
 
         logging.exception(
-            "Не удалось отправить ответ поддержки"
+            "Ошибка отправки ответа поддержки"
         )
 
         await message.answer(
-            "❌ Не удалось отправить сообщение пользователю."
+            "Не удалось отправить сообщение."
         )
 
     return True
 
 
 # ============================================================
-# DEPOSIT
+# SUPPORT MESSAGE
 # ============================================================
 
-@dp.callback_query(F.data == "wallet:deposit")
-async def callback_deposit(callback: CallbackQuery):
+async def process_support_message(message):
 
-    clear_state(callback.from_user.id)
+    user = message.from_user
 
-    text = (
-        "📁 *Пополнение баланса*\n\n"
-        "Для пополнения баланса обратитесь в поддержку.\n\n"
-        "Оператор поможет оформить пополнение."
-    )
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                button(
-                    "🛟 Поддержка",
-                    "support:operator",
-                    "primary"
-                )
-            ],
-            [
-                button(
-                    "Выйти",
-                    "menu:home",
-                    "danger"
-                )
-            ]
-        ]
-    )
-
-    await callback.answer()
-
-    await safe_edit(
-        callback,
-        text,
-        keyboard
-    )
-
-
-# ============================================================
-# WITHDRAW
-# ============================================================
-
-@dp.callback_query(F.data == "wallet:withdraw")
-async def callback_withdraw(callback: CallbackQuery):
-
-    user_id = callback.from_user.id
-
-    ensure_user(callback.from_user)
-
-    release_expired_holds()
-
-    balance = get_balance(user_id)
-    held_balance = get_held_balance(user_id)
-
-    if balance <= 0:
-
-        if held_balance > 0:
-
-            held_text = f"{held_balance:,}".replace(",", " ")
-
-            await callback.answer(
-                f"❄️ Все доступные средства находятся "
-                f"на удержании: {held_text} ₽",
-                show_alert=True
-            )
-
-        else:
-
-            await callback.answer(
-                "❌ На балансе нет средств для вывода.",
-                show_alert=True
-            )
-
+    if not message.text:
         return
 
-    balance_text = f"{balance:,}".replace(",", " ")
-    held_text = f"{held_balance:,}".replace(",", " ")
+    with db() as conn:
 
-    text = (
-        "✳️ *Вывод средств*\n\n"
-        f"Доступно: *{balance_text}* ₽\n"
-        f"❄️ На удержании: *{held_text}* ₽\n\n"
-        "Для оформления вывода обратитесь в поддержку."
+        request = conn.execute("""
+            INSERT INTO support_requests (
+                user_id,
+                created_at
+            )
+            VALUES (?, ?)
+            RETURNING id
+        """, (
+            user.id,
+            now_iso()
+        )).fetchone()
+
+        request_id = request["id"]
+
+        conn.commit()
+
+    clear_state(user.id)
+
+    username = (
+        f"@{user.username}"
+        if user.username
+        else "без username"
     )
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                button(
-                    "🛟 Оформить вывод",
-                    "support:operator",
-                    "primary"
+    admin_text = (
+        "*Новое сообщение в поддержку*\n\n"
+        f"Заявка: #{request_id}\n"
+        f"Пользователь: {username}\n"
+        f"ID: `{user.id}`\n\n"
+        f"{message.text}"
+    )
+
+    for admin_id in ADMINS:
+
+        try:
+
+            await bot.send_message(
+                admin_id,
+                admin_text,
+                reply_markup=admin_reply_keyboard(
+                    user.id
                 )
-            ],
-            [
-                button(
-                    "Выйти",
-                    "menu:home",
-                    "danger"
-                )
-            ]
-        ]
+            )
+
+        except Exception:
+
+            logging.exception(
+                "Ошибка уведомления поддержки"
+            )
+
+    await message.answer(
+        "Сообщение отправлено в поддержку.\n\n"
+        "Оператор ответит вам в этом чате."
     )
 
-    await callback.answer()
 
-    await safe_edit(
-        callback,
-        text,
-        keyboard
+# ============================================================
+# DEPOSIT REQUEST
+# ============================================================
+
+async def process_deposit_amount(message):
+
+    state = get_state(message.from_user.id)
+
+    if not isinstance(state, dict):
+        return False
+
+    if state.get("state") != "deposit_amount":
+        return False
+
+    if not message.text.isdigit():
+
+        await message.answer(
+            "Введите целое число больше 0."
+        )
+        return True
+
+    amount = int(message.text)
+
+    if amount <= 0:
+
+        await message.answer(
+            "Сумма должна быть больше 0."
+        )
+        return True
+
+    currency = state["currency"]
+
+    with db() as conn:
+
+        cursor = conn.execute("""
+            INSERT INTO deposit_requests (
+                user_id,
+                currency,
+                amount,
+                status,
+                created_at
+            )
+            VALUES (?, ?, ?, 'pending', ?)
+        """, (
+            message.from_user.id,
+            currency,
+            amount,
+            now_iso()
+        ))
+
+        request_id = cursor.lastrowid
+
+        conn.commit()
+
+    clear_state(message.from_user.id)
+
+    await message.answer(
+        "*Заявка на пополнение создана.*\n\n"
+        f"Сумма: *{fmt(amount)}* {currency_name(currency)}\n"
+        f"Заявка: `#{request_id}`\n\n"
+        "Ожидайте ответа оператора."
     )
+
+    username = (
+        f"@{message.from_user.username}"
+        if message.from_user.username
+        else "без username"
+    )
+
+    for admin_id in ADMINS:
+
+        try:
+
+            await bot.send_message(
+                admin_id,
+                "*Новая заявка на пополнение*\n\n"
+                f"Заявка: #{request_id}\n"
+                f"Пользователь: {username}\n"
+                f"ID: `{message.from_user.id}`\n"
+                f"Сумма: *{fmt(amount)}* "
+                f"{currency_name(currency)}"
+            )
+
+        except Exception:
+            logging.exception(
+                "Ошибка уведомления о пополнении"
+            )
+
+    return True
+
+
+# ============================================================
+# WITHDRAW REQUEST
+# ============================================================
+
+async def process_withdraw_amount(message):
+
+    state = get_state(message.from_user.id)
+
+    if not isinstance(state, dict):
+        return False
+
+    if state.get("state") != "withdraw_amount":
+        return False
+
+    if not message.text.isdigit():
+
+        await message.answer(
+            "Введите целое число больше 0."
+        )
+        return True
+
+    amount = int(message.text)
+    currency = state["currency"]
+
+    if amount <= 0:
+
+        await message.answer(
+            "Сумма должна быть больше 0."
+        )
+        return True
+
+    balance = get_balance(
+        message.from_user.id,
+        currency
+    )
+
+    if amount > balance:
+
+        await message.answer(
+            "Недостаточно средств.\n\n"
+            f"Доступно: *{fmt(balance)}* "
+            f"{currency_name(currency)}"
+        )
+
+        return True
+
+    with db() as conn:
+
+        balance_col = balance_column(currency)
+
+        cursor = conn.execute(
+            f"""
+            UPDATE users
+            SET {balance_col} = {balance_col} - ?
+            WHERE user_id = ?
+            AND {balance_col} >= ?
+            """,
+            (
+                amount,
+                message.from_user.id,
+                amount
+            )
+        )
+
+        if cursor.rowcount != 1:
+
+            await message.answer(
+                "Не удалось создать заявку. "
+                "Попробуйте ещё раз."
+            )
+
+            return True
+
+        cursor = conn.execute("""
+            INSERT INTO withdrawal_requests (
+                user_id,
+                currency,
+                amount,
+                status,
+                created_at
+            )
+            VALUES (?, ?, ?, 'pending', ?)
+        """, (
+            message.from_user.id,
+            currency,
+            amount,
+            now_iso()
+        ))
+
+        request_id = cursor.lastrowid
+
+        conn.execute("""
+            INSERT INTO operations (
+                user_id,
+                kind,
+                amount,
+                currency,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            message.from_user.id,
+            "withdraw_request",
+            -amount,
+            currency,
+            now_iso()
+        ))
+
+        conn.commit()
+
+    clear_state(message.from_user.id)
+
+    await message.answer(
+        "*Заявка на вывод создана.*\n\n"
+        f"Сумма: *{fmt(amount)}* {currency_name(currency)}\n"
+        f"Заявка: `#{request_id}`\n\n"
+        "Ожидайте обработки оператором."
+    )
+
+    username = (
+        f"@{message.from_user.username}"
+        if message.from_user.username
+        else "без username"
+    )
+
+    for admin_id in ADMINS:
+
+        try:
+
+            await bot.send_message(
+                admin_id,
+                "*Новая заявка на вывод*\n\n"
+                f"Заявка: #{request_id}\n"
+                f"Пользователь: {username}\n"
+                f"ID: `{message.from_user.id}`\n"
+                f"Сумма: *{fmt(amount)}* "
+                f"{currency_name(currency)}"
+            )
+
+        except Exception:
+            logging.exception(
+                "Ошибка уведомления о выводе"
+            )
+
+    return True
 
 
 # ============================================================
@@ -1378,38 +1966,30 @@ async def callback_withdraw(callback: CallbackQuery):
 @dp.callback_query(
     F.data.startswith("deal:confirm:")
 )
-async def callback_confirm_deal(callback: CallbackQuery):
+async def callback_confirm_deal(callback):
 
     buyer_id = callback.from_user.id
 
     try:
-
         deal_id = int(
             callback.data.split(":")[-1]
         )
-
     except ValueError:
 
         await callback.answer(
-            "❌ Некорректная сделка.",
+            "Некорректная сделка.",
             show_alert=True
         )
-
         return
 
     ensure_user(callback.from_user)
 
     with db() as conn:
 
-        # ----------------------------------------------------
-        # Блокируем логику через проверку status='paid'
-        # ----------------------------------------------------
-
         deal = conn.execute("""
             SELECT *
             FROM deals
             WHERE id = ?
-            LIMIT 1
         """, (
             deal_id,
         )).fetchone()
@@ -1417,45 +1997,30 @@ async def callback_confirm_deal(callback: CallbackQuery):
         if not deal:
 
             await callback.answer(
-                "❌ Сделка не найдена.",
+                "Сделка не найдена.",
                 show_alert=True
             )
-
             return
 
         if deal["payer_id"] != buyer_id:
 
             await callback.answer(
-                "❌ Вы не являетесь покупателем этой сделки.",
+                "Вы не являетесь покупателем.",
                 show_alert=True
             )
-
             return
 
         if deal["status"] != "paid":
 
-            if deal["status"] == "confirmed":
-
-                await callback.answer(
-                    "❌ Сделка уже подтверждена.",
-                    show_alert=True
-                )
-
-            else:
-
-                await callback.answer(
-                    "❌ Сделка пока недоступна для подтверждения.",
-                    show_alert=True
-                )
-
+            await callback.answer(
+                "Сделка уже обработана или недоступна.",
+                show_alert=True
+            )
             return
 
         amount = int(deal["amount"])
+        currency = deal["currency"]
         confirmed_at = now_iso()
-
-        # ----------------------------------------------------
-        # Меняем статус
-        # ----------------------------------------------------
 
         cursor = conn.execute("""
             UPDATE deals
@@ -1472,20 +2037,18 @@ async def callback_confirm_deal(callback: CallbackQuery):
         if cursor.rowcount != 1:
 
             await callback.answer(
-                "❌ Сделка уже была подтверждена.",
+                "Сделка уже была подтверждена.",
                 show_alert=True
             )
-
             return
 
-        # ----------------------------------------------------
-        # Зачисляем продавцу в УДЕРЖАНИЕ
-        # ----------------------------------------------------
+        held_col = held_column(currency)
 
-        conn.execute("""
+        conn.execute(
+            f"""
             UPDATE users
             SET
-                held_balance = held_balance + ?,
+                {held_col} = {held_col} + ?,
                 first_paid_at =
                     CASE
                         WHEN first_paid_at IS NULL
@@ -1493,15 +2056,13 @@ async def callback_confirm_deal(callback: CallbackQuery):
                         ELSE first_paid_at
                     END
             WHERE user_id = ?
-        """, (
-            amount,
-            confirmed_at,
-            deal["creator_id"]
-        ))
-
-        # ----------------------------------------------------
-        # Создаём удержание
-        # ----------------------------------------------------
+            """,
+            (
+                amount,
+                confirmed_at,
+                deal["creator_id"]
+            )
+        )
 
         release_at = (
             datetime.now(timezone.utc)
@@ -1512,48 +2073,42 @@ async def callback_confirm_deal(callback: CallbackQuery):
             INSERT INTO balance_holds (
                 user_id,
                 amount,
+                currency,
                 deal_id,
                 created_at,
                 release_at,
                 released
             )
-            VALUES (?, ?, ?, ?, ?, 0)
+            VALUES (?, ?, ?, ?, ?, ?, 0)
         """, (
             deal["creator_id"],
             amount,
+            currency,
             deal_id,
             confirmed_at,
             release_at
         ))
-
-        # ----------------------------------------------------
-        # Операция продавца
-        # ----------------------------------------------------
 
         conn.execute("""
             INSERT INTO operations (
                 user_id,
                 kind,
                 amount,
+                currency,
                 deal_id,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
         """, (
             deal["creator_id"],
             "deal_confirmed_hold",
             amount,
+            currency,
             deal_id,
             confirmed_at
         ))
 
         conn.commit()
-
-    amount_text = f"{amount:,}".replace(",", " ")
-
-    # ========================================================
-    # Покупателю
-    # ========================================================
 
     await callback.answer(
         "Сделка подтверждена!",
@@ -1563,59 +2118,90 @@ async def callback_confirm_deal(callback: CallbackQuery):
     try:
 
         await callback.message.edit_text(
-            "✅ *Сделка подтверждена.*\n\n"
-            "Средства успешно зачислены продавцу "
+            "*Сделка подтверждена.*\n\n"
+            "Средства зачислены продавцу "
             "и помещены на удержание."
         )
 
     except TelegramBadRequest:
         pass
 
-    # ========================================================
-    # Продавцу
-    # ========================================================
-
     try:
 
         await bot.send_message(
             deal["creator_id"],
-            "❄️ *Сделка подтверждена*\n\n"
-            f"💰 Сумма: *{amount_text}* ₽\n"
-            f"🔑 Код сделки: `{deal['code']}`\n\n"
-            "Средства зачислены на ваш счёт и находятся "
-            f"на удержании в течение {FREEZE_DAYS} дней.\n\n"
-            "После окончания удержания средства автоматически "
-            "станут доступны для вывода."
+            "*Сделка подтверждена*\n\n"
+            f"Сумма: *{fmt(amount)}* "
+            f"{currency_name(currency)}\n"
+            f"Код сделки: `{deal['code']}`\n\n"
+            f"Средства находятся на удержании "
+            f"{FREEZE_DAYS} дня."
         )
 
     except Exception:
-
         logging.exception(
-            "Не удалось уведомить продавца "
-            "о подтверждении сделки"
+            "Ошибка уведомления продавца"
         )
+
+
+# ============================================================
+# ADMIN PAYMENT
+# ============================================================
+
+async def admin_pay_deal(deal_id, admin_id):
+
+    if admin_id not in ADMINS:
+        return False, "Нет доступа."
+
+    with db() as conn:
+
+        deal = conn.execute("""
+            SELECT *
+            FROM deals
+            WHERE id = ?
+        """, (
+            deal_id,
+        )).fetchone()
+
+        if not deal:
+            return False, "Сделка не найдена."
+
+        if deal["status"] != "pending":
+            return False, "Сделка уже обработана."
+
+        if deal["creator_id"] == admin_id:
+            return False, "Нельзя оплатить свою сделку."
+
+        paid_at = now_iso()
+
+        cursor = conn.execute("""
+            UPDATE deals
+            SET
+                status = 'paid',
+                payer_id = ?,
+                paid_at = ?
+            WHERE id = ?
+            AND status = 'pending'
+        """, (
+            admin_id,
+            paid_at,
+            deal_id
+        ))
+
+        if cursor.rowcount != 1:
+            return False, "Сделка уже оплачена."
+
+        conn.commit()
+
+    return True, deal
 
 
 # ============================================================
 # /P CODE
-#
-# Обычный пользователь:
-# - баланс должен быть достаточным
-# - деньги списываются
-# - продавцу сразу НЕ начисляются
-#
-# Администратор:
-# - может оплатить даже без баланса
-# - его баланс НЕ изменяется
-#
-# После оплаты:
-# - статус = paid
-# - покупатель получает кнопку подтверждения
-# - продавец получает уведомление
 # ============================================================
 
 @dp.message(Command("p"))
-async def cmd_pay(message: Message):
+async def cmd_pay(message):
 
     ensure_user(message.from_user)
 
@@ -1624,30 +2210,23 @@ async def cmd_pay(message: Message):
     if len(parts) != 2:
 
         await message.answer(
-            "❌ Укажите код сделки.\n\n"
+            "Укажите код сделки.\n\n"
             "Пример:\n"
-            "`/p ST-7K4P2Q`"
+            "`/p FP-7K4P2Q`"
         )
-
         return
 
     code = parts[1].strip().upper()
 
     payer_id = message.from_user.id
-
     is_admin = payer_id in ADMINS
 
     with db() as conn:
-
-        # ----------------------------------------------------
-        # Находим сделку
-        # ----------------------------------------------------
 
         deal = conn.execute("""
             SELECT *
             FROM deals
             WHERE UPPER(code) = ?
-            LIMIT 1
         """, (
             code,
         )).fetchone()
@@ -1655,76 +2234,49 @@ async def cmd_pay(message: Message):
         if not deal:
 
             await message.answer(
-                "❌ Сделка с таким кодом не найдена."
+                "Сделка с таким кодом не найдена."
             )
-
             return
-
-        # ----------------------------------------------------
-        # Проверяем статус
-        # ----------------------------------------------------
 
         if deal["status"] != "pending":
 
-            if deal["status"] == "paid":
-
-                await message.answer(
-                    "❌ Эта сделка уже оплачена и ожидает "
-                    "подтверждения покупателя."
-                )
-
-            elif deal["status"] == "confirmed":
-
-                await message.answer(
-                    "❌ Эта сделка уже подтверждена."
-                )
-
-            else:
-
-                await message.answer(
-                    "❌ Эта сделка уже обработана."
-                )
-
+            await message.answer(
+                "Эта сделка уже обработана."
+            )
             return
-
-        # ----------------------------------------------------
-        # Нельзя оплатить свою сделку
-        # ----------------------------------------------------
 
         if deal["creator_id"] == payer_id:
 
             await message.answer(
-                "❌ Свою сделку оплатить нельзя."
+                "Свою сделку оплатить нельзя."
             )
-
             return
 
         amount = int(deal["amount"])
-
-        # ----------------------------------------------------
-        # Обычный пользователь
-        # ----------------------------------------------------
+        currency = deal["currency"]
 
         if not is_admin:
 
-            payer = conn.execute("""
-                SELECT balance
+            balance_col = balance_column(currency)
+
+            payer = conn.execute(
+                f"""
+                SELECT {balance_col}
                 FROM users
                 WHERE user_id = ?
-            """, (
-                payer_id,
-            )).fetchone()
+                """,
+                (payer_id,)
+            ).fetchone()
 
             if not payer:
 
                 await message.answer(
-                    "❌ Пользователь не найден."
+                    "Пользователь не найден."
                 )
-
                 return
 
             payer_balance = int(
-                payer["balance"]
+                payer[balance_col]
             )
 
             if payer_balance < amount:
@@ -1732,42 +2284,36 @@ async def cmd_pay(message: Message):
                 missing = amount - payer_balance
 
                 await message.answer(
-                    "❌ Недостаточно средств.\n\n"
-                    f"Стоимость сделки: *{amount:,}* ₽\n"
-                    f"Ваш баланс: *{payer_balance:,}* ₽\n"
-                    f"Не хватает: *{missing:,}* ₽"
-                    .replace(",", " ")
+                    "Недостаточно средств.\n\n"
+                    f"Стоимость: *{fmt(amount)}* "
+                    f"{currency_name(currency)}\n"
+                    f"Баланс: *{fmt(payer_balance)}* "
+                    f"{currency_name(currency)}\n"
+                    f"Не хватает: *{fmt(missing)}* "
+                    f"{currency_name(currency)}"
                 )
-
                 return
 
-            # ------------------------------------------------
-            # Списываем деньги у покупателя
-            # ------------------------------------------------
-
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                f"""
                 UPDATE users
-                SET balance = balance - ?
+                SET {balance_col} = {balance_col} - ?
                 WHERE user_id = ?
-                AND balance >= ?
-            """, (
-                amount,
-                payer_id,
-                amount
-            ))
+                AND {balance_col} >= ?
+                """,
+                (
+                    amount,
+                    payer_id,
+                    amount
+                )
+            )
 
             if cursor.rowcount != 1:
 
                 await message.answer(
-                    "❌ Не удалось провести оплату. "
-                    "Попробуйте ещё раз."
+                    "Не удалось провести оплату."
                 )
-
                 return
-
-        # ----------------------------------------------------
-        # Меняем статус сделки
-        # ----------------------------------------------------
 
         paid_at = now_iso()
 
@@ -1787,29 +2333,26 @@ async def cmd_pay(message: Message):
 
         if cursor.rowcount != 1:
 
-            # Если обычный пользователь уже был списан,
-            # возвращаем ему деньги.
-
             if not is_admin:
 
-                conn.execute("""
+                balance_col = balance_column(currency)
+
+                conn.execute(
+                    f"""
                     UPDATE users
-                    SET balance = balance + ?
+                    SET {balance_col} = {balance_col} + ?
                     WHERE user_id = ?
-                """, (
-                    amount,
-                    payer_id
-                ))
+                    """,
+                    (
+                        amount,
+                        payer_id
+                    )
+                )
 
             await message.answer(
-                "❌ Эта сделка уже была оплачена."
+                "Сделка уже была оплачена."
             )
-
             return
-
-        # ----------------------------------------------------
-        # Операция покупателя
-        # ----------------------------------------------------
 
         if not is_admin:
 
@@ -1818,129 +2361,823 @@ async def cmd_pay(message: Message):
                     user_id,
                     kind,
                     amount,
+                    currency,
                     deal_id,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 payer_id,
                 "deal_purchase",
                 -amount,
+                currency,
                 deal["id"],
                 paid_at
             ))
 
         conn.commit()
 
-    amount_text = f"{amount:,}".replace(",", " ")
-
-    # ========================================================
-    # Покупателю
-    # ========================================================
-
-    buyer_text = (
-        "🎁 *Если вы получили подарок — подтвердите сделку*"
-    )
-
     await message.answer(
-        buyer_text,
+        "Если вы получили подарок — подтвердите сделку.",
         reply_markup=confirm_deal_keyboard(
             deal["id"]
         )
     )
 
-    # ========================================================
-    # Дополнительное сообщение об оплате
-    # ========================================================
+    try:
 
-    if is_admin:
+        await bot.send_message(
+            deal["creator_id"],
+            "Покупатель оплатил сделку.\n\n"
+            f"Сумма: *{fmt(amount)}* "
+            f"{currency_name(currency)}\n\n"
+            "После передачи подарка покупатель сможет "
+            "подтвердить сделку."
+        )
 
-        try:
+    except Exception:
+        logging.exception(
+            "Ошибка уведомления продавца"
+        )
 
-            await message.answer(
-                "✅ *Сделка оплачена администратором.*\n\n"
-                f"🔑 Код: `{code}`\n"
-                f"💰 Сумма: *{amount_text}* ₽\n\n"
-                "Баланс администратора не изменён.\n"
-                "Средства сделки ожидают подтверждения покупателя."
+
+# ============================================================
+# /ADMIN
+# ============================================================
+
+@dp.message(Command("admin"))
+async def cmd_admin(message):
+
+    if message.from_user.id not in ADMINS:
+
+        await message.answer(
+            "У вас нет доступа к этой команде."
+        )
+        return
+
+    text = (
+        "*Административные команды*\n\n"
+        "`/admin` — список команд\n"
+        "`/work` — управление сделками\n"
+        "`/p CODE` — оплатить сделку\n"
+        "`/txt ТЕКСТ` — рассылка всем пользователям\n"
+        "`/profit СУММА` — уведомление о крупной сделке\n"
+        "`/m СУММА @username` — начислить баланс в ₽\n"
+        "`/delbal` — очистить балансы\n"
+        "`/delsdel` — удалить все сделки\n"
+        "`/cancel` — отменить текущее действие\n\n"
+        "Все перечисленные команды доступны только администраторам."
+    )
+
+    await message.answer(text)
+
+
+# ============================================================
+# /WORK
+# ============================================================
+
+WORK_PAGE_SIZE = 3
+work_pages = {}
+
+
+def work_keyboard(page, total):
+
+    buttons = []
+
+    if page > 0:
+
+        buttons.append(
+            button(
+                "⬅️",
+                f"work:page:{page - 1}",
+                "primary"
+            )
+        )
+
+    if (page + 1) * WORK_PAGE_SIZE < total:
+
+        buttons.append(
+            button(
+                "➡️",
+                f"work:page:{page + 1}",
+                "primary"
+            )
+        )
+
+    rows = []
+
+    if buttons:
+        rows.append(buttons)
+
+    rows.append([
+        button(
+            "Обновить",
+            f"work:page:{page}",
+            "success"
+        )
+    ])
+
+    rows.append([
+        button(
+            "Закрыть",
+            "menu:home",
+            "danger"
+        )
+    ])
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows
+    )
+
+
+def deal_admin_keyboard(deal_id):
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                button(
+                    "Оплатить",
+                    f"work:pay:{deal_id}",
+                    "primary"
+                ),
+                button(
+                    "Отменить",
+                    f"work:cancel:{deal_id}",
+                    "danger"
+                )
+            ],
+            [
+                button(
+                    "Удалить",
+                    f"work:delete:{deal_id}",
+                    "danger"
+                )
+            ]
+        ]
+    )
+
+
+async def render_work(
+    target,
+    page=0
+):
+
+    with db() as conn:
+
+        total_row = conn.execute("""
+            SELECT COUNT(*) AS count
+            FROM deals
+        """).fetchone()
+
+        total = int(total_row["count"])
+
+        if total == 0:
+
+            text = (
+                "*Управление сделками*\n\n"
+                "Сделок пока нет."
             )
 
-        except Exception:
-
-            logging.exception(
-                "Ошибка сообщения администратору"
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        button(
+                            "Закрыть",
+                            "menu:home",
+                            "danger"
+                        )
+                    ]
+                ]
             )
 
-    # ========================================================
-    # Продавцу
-    # ========================================================
+        else:
+
+            deals = conn.execute("""
+                SELECT
+                    d.*,
+
+                    seller.username AS seller_username,
+                    seller.first_name AS seller_name,
+
+                    buyer.username AS buyer_username,
+                    buyer.first_name AS buyer_name
+
+                FROM deals d
+
+                LEFT JOIN users seller
+                    ON seller.user_id = d.creator_id
+
+                LEFT JOIN users buyer
+                    ON buyer.user_id = d.payer_id
+
+                ORDER BY d.id DESC
+
+                LIMIT ? OFFSET ?
+            """, (
+                WORK_PAGE_SIZE,
+                page * WORK_PAGE_SIZE
+            )).fetchall()
+
+            text = (
+                f"*Управление сделками*\n"
+                f"Страница {page + 1}\n\n"
+            )
+
+            for deal in deals:
+
+                seller = (
+                    f"@{deal['seller_username']}"
+                    if deal["seller_username"]
+                    else str(deal["creator_id"])
+                )
+
+                buyer = (
+                    f"@{deal['buyer_username']}"
+                    if deal["buyer_username"]
+                    else (
+                        str(deal["payer_id"])
+                        if deal["payer_id"]
+                        else "—"
+                    )
+                )
+
+                text += (
+                    f"*#{deal['id']} — {deal['code']}*\n"
+                    f"Статус: `{deal['status']}`\n"
+                    f"Продавец: {seller}\n"
+                    f"Покупатель: {buyer}\n"
+                    f"Сумма: *{fmt(deal['amount'])}* "
+                    f"{currency_name(deal['currency'])}\n"
+                    f"NFT: {deal['gift_url']}\n"
+                    f"Создана: {deal['created_at']}\n\n"
+                )
+
+            # Отдельная кнопка управления для каждой сделки
+            rows = []
+
+            for deal in deals:
+
+                rows.append([
+                    button(
+                        f"#{deal['id']} {deal['code']}",
+                        f"work:open:{deal['id']}",
+                        "primary"
+                    )
+                ])
+
+            nav = []
+
+            if page > 0:
+                nav.append(
+                    button(
+                        "⬅️",
+                        f"work:page:{page - 1}",
+                        "primary"
+                    )
+                )
+
+            if (page + 1) * WORK_PAGE_SIZE < total:
+                nav.append(
+                    button(
+                        "➡️",
+                        f"work:page:{page + 1}",
+                        "primary"
+                    )
+                )
+
+            if nav:
+                rows.append(nav)
+
+            rows.append([
+                button(
+                    "Обновить",
+                    f"work:page:{page}",
+                    "success"
+                )
+            ])
+
+            rows.append([
+                button(
+                    "Закрыть",
+                    "menu:home",
+                    "danger"
+                )
+            ])
+
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=rows
+            )
+
+    if isinstance(target, CallbackQuery):
+
+        await safe_edit(
+            target,
+            text,
+            keyboard
+        )
+
+    else:
+
+        await target.answer(
+            text,
+            reply_markup=keyboard
+        )
+
+
+@dp.message(Command("work"))
+async def cmd_work(message):
+
+    if message.from_user.id not in ADMINS:
+
+        await message.answer(
+            "У вас нет доступа к этой команде."
+        )
+        return
+
+    await render_work(
+        message,
+        0
+    )
+
+
+@dp.callback_query(
+    F.data.startswith("work:page:")
+)
+async def callback_work_page(callback):
+
+    if callback.from_user.id not in ADMINS:
+
+        await callback.answer(
+            "У вас нет доступа.",
+            show_alert=True
+        )
+        return
+
+    try:
+        page = int(
+            callback.data.split(":")[-1]
+        )
+    except ValueError:
+        page = 0
+
+    await callback.answer()
+
+    await render_work(
+        callback,
+        max(0, page)
+    )
+
+
+@dp.callback_query(
+    F.data.startswith("work:open:")
+)
+async def callback_work_open(callback):
+
+    if callback.from_user.id not in ADMINS:
+
+        await callback.answer(
+            "У вас нет доступа.",
+            show_alert=True
+        )
+        return
+
+    try:
+        deal_id = int(
+            callback.data.split(":")[-1]
+        )
+    except ValueError:
+
+        await callback.answer(
+            "Ошибка сделки.",
+            show_alert=True
+        )
+        return
+
+    with db() as conn:
+
+        deal = conn.execute("""
+            SELECT
+                d.*,
+
+                seller.username AS seller_username,
+                buyer.username AS buyer_username
+
+            FROM deals d
+
+            LEFT JOIN users seller
+                ON seller.user_id = d.creator_id
+
+            LEFT JOIN users buyer
+                ON buyer.user_id = d.payer_id
+
+            WHERE d.id = ?
+        """, (
+            deal_id,
+        )).fetchone()
+
+    if not deal:
+
+        await callback.answer(
+            "Сделка не найдена.",
+            show_alert=True
+        )
+        return
+
+    seller = (
+        f"@{deal['seller_username']}"
+        if deal["seller_username"]
+        else str(deal["creator_id"])
+    )
+
+    buyer = (
+        f"@{deal['buyer_username']}"
+        if deal["buyer_username"]
+        else (
+            str(deal["payer_id"])
+            if deal["payer_id"]
+            else "—"
+        )
+    )
+
+    text = (
+        f"*Сделка #{deal['id']}*\n\n"
+        f"Код: `{deal['code']}`\n"
+        f"Статус: `{deal['status']}`\n\n"
+        f"Продавец: {seller}\n"
+        f"ID продавца: `{deal['creator_id']}`\n\n"
+        f"Покупатель: {buyer}\n"
+        f"ID покупателя: "
+        f"`{deal['payer_id'] or '—'}`\n\n"
+        f"NFT: {deal['gift_url']}\n"
+        f"Сумма: *{fmt(deal['amount'])}* "
+        f"{currency_name(deal['currency'])}\n\n"
+        f"Создана: {deal['created_at']}"
+    )
+
+    await callback.answer()
+
+    await safe_edit(
+        callback,
+        text,
+        InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    button(
+                        "Оплатить",
+                        f"work:pay:{deal_id}",
+                        "primary"
+                    ),
+                    button(
+                        "Отменить",
+                        f"work:cancel:{deal_id}",
+                        "danger"
+                    )
+                ],
+                [
+                    button(
+                        "Удалить",
+                        f"work:delete:{deal_id}",
+                        "danger"
+                    )
+                ],
+                [
+                    button(
+                        "Назад",
+                        "work:page:0",
+                        "success"
+                    )
+                ]
+            ]
+        )
+    )
+
+
+@dp.callback_query(
+    F.data.startswith("work:pay:")
+)
+async def callback_work_pay(callback):
+
+    if callback.from_user.id not in ADMINS:
+
+        await callback.answer(
+            "У вас нет доступа.",
+            show_alert=True
+        )
+        return
+
+    try:
+        deal_id = int(
+            callback.data.split(":")[-1]
+        )
+    except ValueError:
+
+        await callback.answer(
+            "Ошибка.",
+            show_alert=True
+        )
+        return
+
+    success, result = await admin_pay_deal(
+        deal_id,
+        callback.from_user.id
+    )
+
+    if not success:
+
+        await callback.answer(
+            result,
+            show_alert=True
+        )
+        return
+
+    deal = result
+
+    await callback.answer(
+        "Сделка оплачена.",
+        show_alert=True
+    )
 
     try:
 
         await bot.send_message(
             deal["creator_id"],
-            "💸 *Покупатель оплатил сделку, средства "
-            "на удержании, за сделкой следит модератор бота.*\n\n"
-            "Вы можете передавать подарок, после этого "
-            "сделка будет подтверждена."
+            "Покупатель оплатил сделку.\n\n"
+            f"Код: `{deal['code']}`\n"
+            f"Сумма: *{fmt(deal['amount'])}* "
+            f"{currency_name(deal['currency'])}"
         )
 
     except Exception:
-
         logging.exception(
-            "Не удалось отправить уведомление продавцу"
+            "Ошибка уведомления продавца"
         )
+
+    await render_work(
+        callback,
+        0
+    )
+
+
+@dp.callback_query(
+    F.data.startswith("work:cancel:")
+)
+async def callback_work_cancel(callback):
+
+    if callback.from_user.id not in ADMINS:
+
+        await callback.answer(
+            "У вас нет доступа.",
+            show_alert=True
+        )
+        return
+
+    try:
+        deal_id = int(
+            callback.data.split(":")[-1]
+        )
+    except ValueError:
+
+        await callback.answer(
+            "Ошибка.",
+            show_alert=True
+        )
+        return
+
+    with db() as conn:
+
+        deal = conn.execute("""
+            SELECT *
+            FROM deals
+            WHERE id = ?
+        """, (
+            deal_id,
+        )).fetchone()
+
+        if not deal:
+
+            await callback.answer(
+                "Сделка не найдена.",
+                show_alert=True
+            )
+            return
+
+        if deal["status"] == "cancelled":
+
+            await callback.answer(
+                "Сделка уже отменена.",
+                show_alert=True
+            )
+            return
+
+        if deal["status"] == "confirmed":
+
+            await callback.answer(
+                "Подтвержденную сделку отменить нельзя.",
+                show_alert=True
+            )
+            return
+
+        # Если обычный покупатель уже оплатил,
+        # возвращаем деньги.
+        if deal["status"] == "paid" and deal["payer_id"]:
+
+            payer_id = deal["payer_id"]
+            currency = deal["currency"]
+            amount = int(deal["amount"])
+
+            # Админская оплата не списала баланс,
+            # поэтому возвращать её не нужно.
+            if payer_id not in ADMINS:
+
+                balance_col = balance_column(currency)
+
+                conn.execute(
+                    f"""
+                    UPDATE users
+                    SET {balance_col} = {balance_col} + ?
+                    WHERE user_id = ?
+                    """,
+                    (
+                        amount,
+                        payer_id
+                    )
+                )
+
+                conn.execute("""
+                    INSERT INTO operations (
+                        user_id,
+                        kind,
+                        amount,
+                        currency,
+                        deal_id,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    payer_id,
+                    "deal_refund",
+                    amount,
+                    currency,
+                    deal_id,
+                    now_iso()
+                ))
+
+        conn.execute("""
+            UPDATE deals
+            SET status = 'cancelled'
+            WHERE id = ?
+        """, (
+            deal_id,
+        ))
+
+        conn.commit()
+
+    await callback.answer(
+        "Сделка отменена.",
+        show_alert=True
+    )
+
+    try:
+
+        await bot.send_message(
+            deal["creator_id"],
+            f"Сделка `{deal['code']}` была отменена администрацией."
+        )
+
+    except Exception:
+        pass
+
+    if deal["payer_id"]:
+
+        try:
+
+            await bot.send_message(
+                deal["payer_id"],
+                f"Сделка `{deal['code']}` была отменена администрацией."
+            )
+
+        except Exception:
+            pass
+
+    await render_work(
+        callback,
+        0
+    )
+
+
+@dp.callback_query(
+    F.data.startswith("work:delete:")
+)
+async def callback_work_delete(callback):
+
+    if callback.from_user.id not in ADMINS:
+
+        await callback.answer(
+            "У вас нет доступа.",
+            show_alert=True
+        )
+        return
+
+    try:
+        deal_id = int(
+            callback.data.split(":")[-1]
+        )
+    except ValueError:
+
+        await callback.answer(
+            "Ошибка.",
+            show_alert=True
+        )
+        return
+
+    with db() as conn:
+
+        deal = conn.execute("""
+            SELECT *
+            FROM deals
+            WHERE id = ?
+        """, (
+            deal_id,
+        )).fetchone()
+
+        if not deal:
+
+            await callback.answer(
+                "Сделка не найдена.",
+                show_alert=True
+            )
+            return
+
+        # Защита от удаления подтвержденной сделки,
+        # по которой уже создавалось удержание.
+        if deal["status"] == "confirmed":
+
+            await callback.answer(
+                "Подтвержденную сделку удалить нельзя.",
+                show_alert=True
+            )
+            return
+
+        conn.execute("""
+            DELETE FROM deals
+            WHERE id = ?
+        """, (
+            deal_id,
+        ))
+
+        conn.execute("""
+            DELETE FROM operations
+            WHERE deal_id = ?
+        """, (
+            deal_id,
+        ))
+
+        conn.execute("""
+            DELETE FROM balance_holds
+            WHERE deal_id = ?
+        """, (
+            deal_id,
+        ))
+
+        conn.commit()
+
+    await callback.answer(
+        "Сделка удалена.",
+        show_alert=True
+    )
+
+    await render_work(
+        callback,
+        0
+    )
 
 
 # ============================================================
-# /TXT MESSAGE
-#
-# Только администраторы.
-#
-# Использование:
-# /txt Ваш текст
+# /TXT
 # ============================================================
 
 @dp.message(Command("txt"))
-async def cmd_txt(message: Message):
+async def cmd_txt(message):
 
     if message.from_user.id not in ADMINS:
 
         await message.answer(
-            "❌ У вас нет доступа к этой команде."
+            "У вас нет доступа."
         )
-
         return
 
-    parts = message.text.split(
-        maxsplit=1
-    )
+    parts = message.text.split(maxsplit=1)
 
     if len(parts) != 2:
 
         await message.answer(
-            "❌ Укажите текст сообщения.\n\n"
             "Пример:\n"
             "`/txt Сегодня технические работы.`"
         )
-
         return
 
     custom_text = parts[1].strip()
 
-    if not custom_text:
-
-        await message.answer(
-            "❌ Сообщение не может быть пустым."
-        )
-
-        return
-
-    broadcast_text = (
-        "📣 Сообщение от администрации\n\n"
-        f"{custom_text}"
-    )
-
     with db() as conn:
 
         users = conn.execute("""
@@ -1957,93 +3194,51 @@ async def cmd_txt(message: Message):
 
             await bot.send_message(
                 user["user_id"],
-                broadcast_text,
+                "Сообщение от администрации\n\n"
+                + custom_text,
                 parse_mode=None
             )
 
             sent += 1
 
-            # Небольшая пауза между сообщениями
             await asyncio.sleep(0.04)
 
         except Exception:
 
             failed += 1
 
-            logging.exception(
-                "Не удалось отправить /txt пользователю %s",
-                user["user_id"]
-            )
-
     await message.answer(
-        "✅ Рассылка завершена.\n\n"
-        f"📨 Отправлено: {sent}\n"
-        f"❌ Не доставлено: {failed}"
+        "Рассылка завершена.\n\n"
+        f"Отправлено: {sent}\n"
+        f"Не доставлено: {failed}"
     )
 
 
 # ============================================================
-# /PROFIT AMOUNT
-#
-# Только администраторы.
-#
-# Пример:
-# /profit 50000
+# /PROFIT
 # ============================================================
 
 @dp.message(Command("profit"))
-async def cmd_profit(message: Message):
+async def cmd_profit(message):
 
     if message.from_user.id not in ADMINS:
 
         await message.answer(
-            "❌ У вас нет доступа к этой команде."
+            "У вас нет доступа."
         )
-
         return
 
-    parts = message.text.split(
-        maxsplit=1
-    )
+    parts = message.text.split(maxsplit=1)
 
-    if len(parts) != 2:
+    if len(parts) != 2 or not parts[1].isdigit():
 
         await message.answer(
-            "❌ Укажите сумму.\n\n"
             "Пример:\n"
             "`/profit 50000`"
         )
-
         return
 
-    value = parts[1].strip()
-
-    if not value.isdigit():
-
-        await message.answer(
-            "❌ Сумма должна быть целым числом."
-        )
-
-        return
-
-    amount = int(value)
-
-    if amount <= 0:
-
-        await message.answer(
-            "❌ Сумма должна быть больше 0."
-        )
-
-        return
-
-    amount_text = f"{amount:,}".replace(",", " ")
-
-    broadcast_text = (
-        "📣 Сообщение всем пользователям\n\n"
-        "В боте только что произошла большая сделка "
-        f"({amount_text} рублей)\n\n"
-        f"{display_datetime()}"
-    )
+    amount = int(parts[1])
 
     with db() as conn:
 
@@ -2055,13 +3250,20 @@ async def cmd_profit(message: Message):
     sent = 0
     failed = 0
 
+    text = (
+        "Сообщение всем пользователям\n\n"
+        "В боте только что произошла большая сделка "
+        f"({fmt(amount)} рублей)\n\n"
+        f"{display_datetime()}"
+    )
+
     for user in users:
 
         try:
 
             await bot.send_message(
                 user["user_id"],
-                broadcast_text,
+                text,
                 parse_mode=None
             )
 
@@ -2070,35 +3272,26 @@ async def cmd_profit(message: Message):
             await asyncio.sleep(0.04)
 
         except Exception:
-
             failed += 1
 
-            logging.exception(
-                "Не удалось отправить /profit пользователю %s",
-                user["user_id"]
-            )
-
     await message.answer(
-        "✅ Уведомление отправлено.\n\n"
-        f"💰 Сумма: {amount_text} ₽\n"
-        f"📨 Отправлено: {sent}\n"
-        f"❌ Не доставлено: {failed}"
+        f"Отправлено: {sent}\n"
+        f"Не доставлено: {failed}"
     )
 
 
 # ============================================================
-# /M AMOUNT @USERNAME
+# /M
 # ============================================================
 
 @dp.message(Command("m"))
-async def cmd_money(message: Message):
+async def cmd_money(message):
 
     if message.from_user.id not in ADMINS:
 
         await message.answer(
-            "❌ У вас нет доступа к этой команде."
+            "У вас нет доступа."
         )
-
         return
 
     parts = message.text.split()
@@ -2109,40 +3302,25 @@ async def cmd_money(message: Message):
             "Использование:\n"
             "`/m 100000 @username`"
         )
-
         return
 
     try:
-
         amount = int(parts[1])
-
     except ValueError:
 
         await message.answer(
-            "❌ Сумма должна быть числом."
+            "Сумма должна быть числом."
         )
-
         return
 
     if amount <= 0:
 
         await message.answer(
-            "❌ Сумма должна быть больше 0."
+            "Сумма должна быть больше 0."
         )
-
         return
 
-    username = parts[2].strip()
-
-    if not username.startswith("@"):
-
-        await message.answer(
-            "❌ Укажите username через @."
-        )
-
-        return
-
-    username = username[1:]
+    username = parts[2].lstrip("@")
 
     with db() as conn:
 
@@ -2150,7 +3328,6 @@ async def cmd_money(message: Message):
             SELECT *
             FROM users
             WHERE LOWER(username) = LOWER(?)
-            LIMIT 1
         """, (
             username,
         )).fetchone()
@@ -2158,10 +3335,8 @@ async def cmd_money(message: Message):
         if not user:
 
             await message.answer(
-                "❌ Пользователь с таким username "
-                "не найден в базе бота."
+                "Пользователь не найден."
             )
-
             return
 
         conn.execute("""
@@ -2178,40 +3353,35 @@ async def cmd_money(message: Message):
                 user_id,
                 kind,
                 amount,
+                currency,
                 created_at
             )
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?)
         """, (
             user["user_id"],
             "admin_credit",
             amount,
+            "RUB",
             now_iso()
         ))
 
         conn.commit()
 
-    amount_text = f"{amount:,}".replace(",", " ")
-
     await message.answer(
-        "✅ Баланс пополнен.\n\n"
-        f"👤 @{username}\n"
-        f"💰 +{amount_text} ₽"
+        f"Баланс @{username} пополнен на "
+        f"*{fmt(amount)} ₽*."
     )
 
     try:
 
         await bot.send_message(
             user["user_id"],
-            "💰 *Баланс пополнен*\n\n"
-            f"Вам начислено: *{amount_text}* ₽"
+            "Баланс пополнен.\n\n"
+            f"Вам начислено: *{fmt(amount)} ₽*"
         )
 
     except Exception:
-
-        logging.exception(
-            "Не удалось уведомить пользователя "
-            "о пополнении"
-        )
+        pass
 
 
 # ============================================================
@@ -2219,14 +3389,13 @@ async def cmd_money(message: Message):
 # ============================================================
 
 @dp.message(Command("delbal"))
-async def cmd_delbal(message: Message):
+async def cmd_delbal(message):
 
     if message.from_user.id not in ADMINS:
 
         await message.answer(
-            "❌ У вас нет доступа к этой команде."
+            "У вас нет доступа."
         )
-
         return
 
     with db() as conn:
@@ -2235,7 +3404,13 @@ async def cmd_delbal(message: Message):
             UPDATE users
             SET
                 balance = 0,
-                held_balance = 0
+                held_balance = 0,
+                gram_balance = 0,
+                gram_held_balance = 0,
+                stars_balance = 0,
+                stars_held_balance = 0,
+                usdt_balance = 0,
+                usdt_held_balance = 0
         """)
 
         conn.execute("""
@@ -2247,7 +3422,7 @@ async def cmd_delbal(message: Message):
         conn.commit()
 
     await message.answer(
-        "✅ Балансы всех пользователей очищены."
+        "Балансы всех пользователей очищены."
     )
 
 
@@ -2256,34 +3431,25 @@ async def cmd_delbal(message: Message):
 # ============================================================
 
 @dp.message(Command("delsdel"))
-async def cmd_delsdel(message: Message):
+async def cmd_delsdel(message):
 
     if message.from_user.id not in ADMINS:
 
         await message.answer(
-            "❌ У вас нет доступа к этой команде."
+            "У вас нет доступа."
         )
-
         return
 
     with db() as conn:
 
-        conn.execute("""
-            DELETE FROM deals
-        """)
-
-        conn.execute("""
-            DELETE FROM operations
-        """)
-
-        conn.execute("""
-            DELETE FROM balance_holds
-        """)
+        conn.execute("DELETE FROM deals")
+        conn.execute("DELETE FROM operations")
+        conn.execute("DELETE FROM balance_holds")
 
         conn.commit()
 
     await message.answer(
-        "✅ Все сделки удалены."
+        "Все сделки удалены."
     )
 
 
@@ -2292,14 +3458,9 @@ async def cmd_delsdel(message: Message):
 # ============================================================
 
 @dp.message(F.text)
-async def text_handler(message: Message):
-
-    # --------------------------------------------------------
-    # Команды здесь не обрабатываем
-    # --------------------------------------------------------
+async def text_handler(message):
 
     if message.text.startswith("/"):
-
         return
 
     ensure_user(message.from_user)
@@ -2307,7 +3468,7 @@ async def text_handler(message: Message):
     user_id = message.from_user.id
 
     # --------------------------------------------------------
-    # Ответ администратора пользователю
+    # Администратор отвечает пользователю
     # --------------------------------------------------------
 
     if user_id in ADMINS:
@@ -2320,42 +3481,61 @@ async def text_handler(message: Message):
             return
 
     # --------------------------------------------------------
-    # Состояние ожидания ссылки
+    # Сообщение пользователя в поддержку
     # --------------------------------------------------------
 
     state = get_state(user_id)
 
-    if state == "waiting_gift":
+    if state == "support_message":
 
-        await process_gift_link(message)
-
+        await process_support_message(message)
         return
 
     # --------------------------------------------------------
-    # Состояние ожидания цены
+    # Пополнение
     # --------------------------------------------------------
+
+    if isinstance(state, dict):
+
+        if state.get("state") == "deposit_amount":
+
+            await process_deposit_amount(message)
+            return
+
+        if state.get("state") == "withdraw_amount":
+
+            await process_withdraw_amount(message)
+            return
+
+    # --------------------------------------------------------
+    # Создание сделки
+    # --------------------------------------------------------
+
+    if state == "waiting_gift":
+
+        await process_gift_link(message)
+        return
 
     if isinstance(state, dict):
 
         if state.get("state") == "waiting_price":
 
             await process_price(message)
-
             return
 
 
 # ============================================================
-# CALLBACK ERRORS
+# UNKNOWN CALLBACK
 # ============================================================
 
 @dp.callback_query()
-async def unknown_callback(callback: CallbackQuery):
+async def unknown_callback(callback):
 
     await callback.answer()
 
 
 # ============================================================
-# START BOT
+# MAIN
 # ============================================================
 
 async def main():
@@ -2363,11 +3543,9 @@ async def main():
     init_db()
 
     logging.info(
-        "STAR OTC запускается..."
+        "FUNPAY запускается..."
     )
 
-    # Автоматическое освобождение средств
-    # после окончания 3-дневного удержания.
     asyncio.create_task(
         release_holds_loop()
     )
@@ -2380,5 +3558,4 @@ async def main():
 # ============================================================
 
 if __name__ == "__main__":
-
     asyncio.run(main())
