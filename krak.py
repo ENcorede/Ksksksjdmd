@@ -1311,8 +1311,8 @@ async def callback_bonus(callback):
     clear_state(callback.from_user.id)
 
     text = (
-        "💥 *ОКТЯБРЬ НА FUNPAY* "
-        "(С 1 по 25 октября)\n\n"
+        "💥 *НОЯБРЬ НА FUNPAY* "
+        "(С 1 по 25 ноября)\n\n"
         "Проведи свою первую сделку на FunPay "
         "и получи +200 ⭐ Telegram Stars!\n\n"
         "Чтобы получить приз:\n\n"
