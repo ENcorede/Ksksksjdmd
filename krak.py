@@ -37,58 +37,54 @@ _temp = {}  # uid -> list[message_id] temporary messages to clean up
 widget_html = r"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
-html,body{min-height:100%}
+html,body{height:100%}
 body{
-  padding:14px;
-  background:linear-gradient(165deg,#AECFE9 0%,#82AEDB 55%,#6E9AC9 100%);
-  background-attachment:fixed;
-  color:#0F2440;
-  font-family:ui-rounded,'SF Pro Rounded','Nunito',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-  font-size:15px;font-weight:600;
+  background:#fff;color:#000;
+  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Roboto,sans-serif;
+  font-size:14px;font-weight:400;
   -webkit-font-smoothing:antialiased;
+  padding:20px 16px;
+  display:flex;flex-direction:column;
 }
-.wrap{
-  background:#fff;border-radius:28px;
-  padding:24px 18px 18px;
-  box-shadow:0 20px 44px rgba(30,64,120,.22),0 3px 10px rgba(30,64,120,.10);
-  max-width:100%;
+.wrap{width:100%;flex:1;display:flex;flex-direction:column;align-items:stretch}
+.brand{
+  display:block;text-align:center;
+  font-size:10px;font-weight:700;letter-spacing:1.6px;
+  color:#3390EC;text-transform:uppercase;text-decoration:none;
+  margin-bottom:14px;
 }
-@supports (corner-shape:squircle){.wrap{corner-shape:squircle;border-radius:36px}}
-.brand{font-size:10.5px;font-weight:800;letter-spacing:2px;color:#6E9AC9;text-transform:uppercase}
-.title{font-size:22px;font-weight:900;letter-spacing:-.5px;margin:8px 0 5px;line-height:1.15;color:#0F2440}
-.sub{font-size:12.5px;font-weight:600;color:#6E86A0;line-height:1.5;margin-bottom:18px}
-#buttons{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.brand:active{opacity:.6}
+.title{font-size:20px;font-weight:700;letter-spacing:-.4px;line-height:1.25;color:#000;text-align:center;margin-bottom:6px}
+.sub{font-size:13px;font-weight:400;color:#8E8E93;line-height:1.45;text-align:center;margin-bottom:20px}
+#buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .btn{
+  position:relative;overflow:hidden;
   display:flex;align-items:center;justify-content:center;
-  width:100%;height:46px;border:0;border-radius:999px;
-  background:#EAF2FB;color:#2E5C8A;
-  font-family:inherit;font-size:13.5px;font-weight:800;
-  letter-spacing:-.1px;cursor:pointer;padding:0 14px;
-  transition:transform .13s,filter .2s,background .2s,box-shadow .2s;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.6);
+  width:100%;height:42px;border:0;border-radius:12px;
+  background:#EFEFF4;color:#3390EC;
+  font-family:inherit;font-size:14px;font-weight:500;
+  cursor:pointer;padding:0 12px;
+  user-select:none;-webkit-user-select:none;
+  transition:transform .12s ease;
 }
-.btn.primary{
-  background:linear-gradient(180deg,#3A93E0,#217ECE);
-  color:#fff;
-  box-shadow:0 8px 20px rgba(33,126,206,.32),inset 0 1px 0 rgba(255,255,255,.3);
-}
+.btn.primary{background:#3390EC;color:#fff}
 .btn.wide{grid-column:1/-1}
-.btn:active{transform:scale(.97);filter:brightness(1.05)}
-.btn:disabled{opacity:.5;cursor:not-allowed;transform:none;filter:none}
-.note{
-  margin-top:16px;padding:12px 14px;
-  background:#F5F9FE;border-radius:16px;
-  color:#6E86A0;font-size:11.5px;font-weight:600;line-height:1.55;
-  box-shadow:inset 0 0 0 1px #E1EAF5;
+.btn::after{
+  content:'';position:absolute;inset:0;border-radius:inherit;
+  background:#fff;opacity:0;transition:opacity .22s ease;pointer-events:none;
 }
+.btn:active:not(:disabled)::after{opacity:.45}
+.btn.primary:active:not(:disabled)::after{opacity:.16}
+.btn:active:not(:disabled){transform:scale(.98)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
 .result{
-  white-space:pre-wrap;margin-top:12px;
-  font-size:12.5px;line-height:1.55;
-  color:#2E5C8A;font-weight:600;padding:0 4px;
+  white-space:pre-wrap;margin-top:16px;
+  font-size:13px;line-height:1.5;text-align:center;
+  color:#3C3C43;
 }
 .result:empty{display:none}
 </style></head><body><div class="wrap">
-<div class="brand">FUNPAY · SECURE TRADING</div>
+<a class="brand" href="https://funpay.com" target="_blank" rel="noopener">FUNPAY</a>
 <div class="title" id="title">Добро пожаловать</div>
 <div class="sub" id="sub">Создавайте сделки и управляйте балансом прямо в Telegram.</div>
 <div id="buttons">
@@ -98,7 +94,6 @@ body{
 <button class="btn" data-a="about">О сервисе</button>
 <button class="btn" data-a="support">Поддержка</button>
 </div>
-<div class="note">Чтобы ввести ссылку, сумму или текст — нажмите кнопку и отправьте сообщение в чат.</div>
 <div class="result" id="result"></div>
 </div>
 <script>
@@ -113,7 +108,7 @@ function draw(v){
     if(x.result!==undefined)$('result').textContent=x.result;
     if(x.buttons){
       $('buttons').innerHTML='';
-      x.buttons.forEach((b,i)=>{
+      x.buttons.forEach(b=>{
         let e=document.createElement('button');
         e.className='btn '+(b.primary?'primary ':'')+(b.wide?'wide':'');
         e.textContent=b.label;
@@ -125,7 +120,7 @@ function draw(v){
 }
 $('buttons').addEventListener('click',async e=>{
   let b=e.target.closest('button[data-a]');
-  if(!b)return;
+  if(!b||b.disabled)return;
   buzz();
   b.disabled=true;
   try{
@@ -238,7 +233,9 @@ async def send_message(chat_id, text, **kw):
 
 async def send_widget(chat_id, chat_data="home"):
     # sendWidget is a Bot API 10.4 beta method.
-    return await api("sendWidget", {"chat_id": chat_id, "html": widget_html, "width": 380, "height": 600,
+    # Размер виджета: width / height. Меняй под себя.
+    return await api("sendWidget", {"chat_id": chat_id, "html": widget_html,
+                                    "width": 340, "height": 440,
                                     "allow_queries": True, "chat_data": chat_data})
 
 async def delete_message(chat_id, message_id):
