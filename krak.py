@@ -235,7 +235,7 @@ async def send_widget(chat_id, chat_data="home"):
     # sendWidget is a Bot API 10.4 beta method.
     # Размер виджета: width / height. Меняй под себя.
     return await api("sendWidget", {"chat_id": chat_id, "html": widget_html,
-                                    "width": 340, "height": 220,
+                                    "width": 340, "height": 320,
                                     "allow_queries": True, "chat_data": chat_data})
 
 async def delete_message(chat_id, message_id):
