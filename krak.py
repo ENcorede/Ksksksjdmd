@@ -34,42 +34,122 @@ offset = 0
 states = {}
 _temp = {}  # uid -> list[message_id] temporary messages to clean up
 
-widget_html = r"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+widget_html = r"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <style>
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
 html,body{min-height:100%}
-body{margin:0;background:linear-gradient(165deg,#AECFE9 0%,#82AEDB 55%,#6E9AC9 100%);background-attachment:fixed;color:#152A44;font:15px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:16px}
-.wrap{background:#fff;border-radius:24px;padding:24px 20px 20px;box-shadow:0 12px 34px #23508A2E,0 3px 8px #23508A18}
-.brand{font-size:11px;font-weight:800;letter-spacing:2.5px;color:#5F86AE;text-transform:uppercase}
-.title{font-size:24px;font-weight:850;color:#0F2440;margin:9px 0 6px;letter-spacing:-.3px;line-height:1.2}
-.sub{color:#6E86A0;font-size:13px;line-height:1.5;margin-bottom:22px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:11px}
-.btn{border:0;border-radius:16px;padding:16px 12px;background:#EAF2FB;color:#2E5C8A;font-size:14px;font-weight:750;text-align:center;min-height:54px;line-height:1.3;box-shadow:inset 0 -1px 0 #D6E3F4;transition:transform .12s ease,background .15s,box-shadow .15s;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center}
-.btn:hover{background:#DEEBFA}
-.btn.primary{background:linear-gradient(135deg,#3877BE 0%,#2B5788 100%);color:#fff;box-shadow:0 5px 16px #2E5C8A45,inset 0 1px 0 #4D8AD0}
-.btn.primary:hover{background:linear-gradient(135deg,#4083CC 0%,#316198 100%)}
-.btn.dark{background:#152A44;color:#fff;box-shadow:inset 0 1px 0 #2E5C8A}
+body{
+  padding:14px;
+  background:linear-gradient(165deg,#AECFE9 0%,#82AEDB 55%,#6E9AC9 100%);
+  background-attachment:fixed;
+  color:#0F2440;
+  font-family:ui-rounded,'SF Pro Rounded','Nunito',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  font-size:15px;font-weight:600;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{
+  background:#fff;border-radius:28px;
+  padding:24px 18px 18px;
+  box-shadow:0 20px 44px rgba(30,64,120,.22),0 3px 10px rgba(30,64,120,.10);
+  max-width:100%;
+}
+@supports (corner-shape:squircle){.wrap{corner-shape:squircle;border-radius:36px}}
+.brand{font-size:10.5px;font-weight:800;letter-spacing:2px;color:#6E9AC9;text-transform:uppercase}
+.title{font-size:22px;font-weight:900;letter-spacing:-.5px;margin:8px 0 5px;line-height:1.15;color:#0F2440}
+.sub{font-size:12.5px;font-weight:600;color:#6E86A0;line-height:1.5;margin-bottom:18px}
+#buttons{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.btn{
+  display:flex;align-items:center;justify-content:center;
+  width:100%;height:46px;border:0;border-radius:999px;
+  background:#EAF2FB;color:#2E5C8A;
+  font-family:inherit;font-size:13.5px;font-weight:800;
+  letter-spacing:-.1px;cursor:pointer;padding:0 14px;
+  transition:transform .13s,filter .2s,background .2s,box-shadow .2s;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.6);
+}
+.btn.primary{
+  background:linear-gradient(180deg,#3A93E0,#217ECE);
+  color:#fff;
+  box-shadow:0 8px 20px rgba(33,126,206,.32),inset 0 1px 0 rgba(255,255,255,.3);
+}
 .btn.wide{grid-column:1/-1}
-.btn:active{transform:scale(.97);opacity:.9}
-.btn:disabled{opacity:.55;cursor:not-allowed}
-.note{margin-top:18px;padding:14px 15px;background:#EFF5FC;border-radius:14px;color:#557BA3;font-size:12px;line-height:1.55;border-left:3px solid #7FAAD6}
-.result{white-space:pre-wrap;margin-top:14px;font-size:13px;line-height:1.55;color:#2E5C8A;font-weight:500}
-</style></head><body><div class="wrap"><div class="brand">FUNPAY • SECURE TRADING</div><div class="title" id="title">Добро пожаловать</div><div class="sub" id="sub">Создавайте сделки и управляйте балансом прямо в Telegram.</div><div class="grid" id="buttons">
-<button class="btn primary wide" data-a="create">🔷 Создать сделку</button>
-<button class="btn" data-a="wallet">👛 Кошелёк</button><button class="btn" data-a="bonus">🎁 Бонусы</button>
-<button class="btn" data-a="about">ℹ️ О сервисе</button><button class="btn" data-a="support">💬 Поддержка</button>
-</div><div class="note">Чтобы ввести ссылку, сумму или сообщение, нажмите нужную кнопку и отправьте текст обычным сообщением в этот чат.</div><div class="result" id="result"></div></div>
+.btn:active{transform:scale(.97);filter:brightness(1.05)}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none;filter:none}
+.note{
+  margin-top:16px;padding:12px 14px;
+  background:#F5F9FE;border-radius:16px;
+  color:#6E86A0;font-size:11.5px;font-weight:600;line-height:1.55;
+  box-shadow:inset 0 0 0 1px #E1EAF5;
+}
+.result{
+  white-space:pre-wrap;margin-top:12px;
+  font-size:12.5px;line-height:1.55;
+  color:#2E5C8A;font-weight:600;padding:0 4px;
+}
+.result:empty{display:none}
+</style></head><body><div class="wrap">
+<div class="brand">FUNPAY · SECURE TRADING</div>
+<div class="title" id="title">Добро пожаловать</div>
+<div class="sub" id="sub">Создавайте сделки и управляйте балансом прямо в Telegram.</div>
+<div id="buttons">
+<button class="btn primary wide" data-a="create">Создать сделку</button>
+<button class="btn" data-a="wallet">Кошелёк</button>
+<button class="btn" data-a="bonus">Бонусы</button>
+<button class="btn" data-a="about">О сервисе</button>
+<button class="btn" data-a="support">Поддержка</button>
+</div>
+<div class="note">Чтобы ввести ссылку, сумму или текст — нажмите кнопку и отправьте сообщение в чат.</div>
+<div class="result" id="result"></div>
+</div>
 <script>
 const $=id=>document.getElementById(id);
 function buzz(){try{TelegramWidget.HapticFeedback.impactOccurred('light')}catch(e){}}
-function draw(v){if(!v)return;try{let x=JSON.parse(v);if(x.title)$('title').textContent=x.title;if(x.sub!==undefined)$('sub').textContent=x.sub;if(x.result!==undefined)$('result').textContent=x.result;if(x.buttons){$('buttons').innerHTML='';x.buttons.forEach((b,i)=>{let e=document.createElement('button');e.className='btn '+(b.primary?'primary ':'')+(b.wide?'wide':'');e.textContent=b.label;e.dataset.a=b.action;$('buttons').appendChild(e)})}}catch(e){$('result').textContent=v}}
-$('buttons').addEventListener('click',async e=>{let b=e.target.closest('button[data-a]');if(!b)return;buzz();b.disabled=true;try{let r=await TelegramWidget.request(b.dataset.a);if(r&&r.result)draw(r.result)}catch(err){$('result').textContent='Не удалось выполнить действие: '+(err.code||err.message||'ошибка');try{TelegramWidget.HapticFeedback.notificationOccurred('error')}catch(_){}}finally{b.disabled=false}});
+function draw(v){
+  if(!v)return;
+  try{
+    let x=JSON.parse(v);
+    if(x.title)$('title').textContent=x.title;
+    if(x.sub!==undefined)$('sub').textContent=x.sub;
+    if(x.result!==undefined)$('result').textContent=x.result;
+    if(x.buttons){
+      $('buttons').innerHTML='';
+      x.buttons.forEach((b,i)=>{
+        let e=document.createElement('button');
+        e.className='btn '+(b.primary?'primary ':'')+(b.wide?'wide':'');
+        e.textContent=b.label;
+        e.dataset.a=b.action;
+        $('buttons').appendChild(e)
+      })
+    }
+  }catch(e){$('result').textContent=v}
+}
+$('buttons').addEventListener('click',async e=>{
+  let b=e.target.closest('button[data-a]');
+  if(!b)return;
+  buzz();
+  b.disabled=true;
+  try{
+    let r=await TelegramWidget.request(b.dataset.a);
+    if(r&&r.result)draw(r.result)
+  }catch(err){
+    $('result').textContent='Не удалось выполнить действие: '+(err.code||err.message||'ошибка');
+    try{TelegramWidget.HapticFeedback.notificationOccurred('error')}catch(_){}
+  }finally{b.disabled=false}
+});
 try{
-const cd=TelegramWidget.chatData||'';
-if(cd.startsWith('confirm:')){const id=cd.split(':')[1];draw(JSON.stringify({title:'Подтверждение сделки',sub:'Подтвердите получение подарка только после фактической передачи.',buttons:[{label:'ПОДТВЕРДИТЬ СДЕЛКУ',action:'deal_confirm:'+id,primary:true,wide:true},{label:'На главную',action:'home'}],result:''}))}
-else if(cd==='admin'){draw(JSON.stringify({title:'Админ-панель',sub:'Управление FunPay',buttons:[{label:'Управление сделками',action:'work:list',primary:true,wide:true},{label:'На главную',action:'home'}],result:'Команды: /admin, /work, /p CODE, /txt ТЕКСТ, /profit СУММА, /m СУММА @username, /delbal, /delsdel, /cancel'}))}
-else if(cd.startsWith('reply:')){const id=cd.split(':')[1];draw(JSON.stringify({title:'Ответ поддержки',sub:'Нажмите кнопку и отправьте ответ обычным сообщением.',buttons:[{label:'Написать ответ',action:'admin_reply:'+id,primary:true,wide:true},{label:'На главную',action:'home'}],result:''}))}
-TelegramWidget.ready()
+  const cd=TelegramWidget.chatData||'';
+  if(cd.startsWith('confirm:')){
+    const id=cd.split(':')[1];
+    draw(JSON.stringify({title:'Подтверждение сделки',sub:'Подтвердите получение подарка только после фактической передачи.',buttons:[{label:'Подтвердить сделку',action:'deal_confirm:'+id,primary:true,wide:true},{label:'На главную',action:'home',wide:true}],result:''}))
+  }
+  else if(cd==='admin'){
+    draw(JSON.stringify({title:'Админ-панель',sub:'Управление FunPay',buttons:[{label:'Управление сделками',action:'work:list',primary:true,wide:true},{label:'На главную',action:'home',wide:true}],result:'Команды: /admin, /work, /p CODE, /txt ТЕКСТ, /profit СУММА, /m СУММА @username, /delbal, /delsdel, /cancel'}))
+  }
+  else if(cd.startsWith('reply:')){
+    const id=cd.split(':')[1];
+    draw(JSON.stringify({title:'Ответ поддержки',sub:'Нажмите кнопку и отправьте ответ обычным сообщением.',buttons:[{label:'Написать ответ',action:'admin_reply:'+id,primary:true,wide:true},{label:'На главную',action:'home',wide:true}],result:''}))
+  }
+  TelegramWidget.ready()
 }catch(e){}
 </script></body></html>"""
 
@@ -158,7 +238,7 @@ async def send_message(chat_id, text, **kw):
 
 async def send_widget(chat_id, chat_data="home"):
     # sendWidget is a Bot API 10.4 beta method.
-    return await api("sendWidget", {"chat_id": chat_id, "html": widget_html, "width": 360, "height": 520,
+    return await api("sendWidget", {"chat_id": chat_id, "html": widget_html, "width": 380, "height": 600,
                                     "allow_queries": True, "chat_data": chat_data})
 
 async def delete_message(chat_id, message_id):
@@ -188,8 +268,8 @@ async def prompt(uid, text, state):
 def result(title, sub="", buttons=None, body=""):
     return json.dumps({"title": title, "sub": sub, "buttons": buttons or [], "result": body}, ensure_ascii=False, separators=(",", ":"))
 def btn(label, action, primary=False, wide=False): return {"label": label, "action": action, "primary": primary, "wide": wide}
-HOME = [btn("🔷 Создать сделку", "create", True, True), btn("👛 Кошелёк", "wallet"), btn("🎁 Бонусы", "bonus"), btn("ℹ️ О сервисе", "about"), btn("💬 Поддержка", "support")]
-BACK = [btn("← На главную", "home", True, True)]
+HOME = [btn("Создать сделку", "create", True, True), btn("Кошелёк", "wallet"), btn("Бонусы", "bonus"), btn("О сервисе", "about"), btn("Поддержка", "support")]
+BACK = [btn("На главную", "home", wide=True)]
 
 async def answer_widget(qid, data):
     # Bot API 10.4: answerWidgetQuery uses widget_query_id + data.
@@ -217,7 +297,7 @@ async def widget_action(upd):
             release_holds()
             body = "\n".join([f"{cname(x)}: {fmt(balance(uid,x))}" for x in CURRENCIES])
             body += f"\n\nНа удержании: {fmt(balance(uid,'RUB',True))} ₽"
-            out = result("Кошелёк", "Ваши балансы", [btn("↗️ Вывод", "withdraw"), btn("🔶 Пополнение", "deposit"), *BACK], body)
+            out = result("Кошелёк", "Ваши балансы", [btn("Вывод", "withdraw"), btn("Пополнение", "deposit"), *BACK], body)
         elif data == "deposit":
             out = result("Пополнение", "Выберите валюту", [btn(x, f"depcur:{x}") for x in CURRENCIES] + BACK)
         elif data.startswith("depcur:"):
@@ -239,7 +319,7 @@ async def widget_action(upd):
             ready = completed(uid)
             body = "Акция 1–25 октября: первая завершённая сделка даёт 200 Telegram Stars."
             label = "Уже получен" if claimed else ("Забрать +200 Stars" if ready and bonus_ok() else "Условия пока не выполнены")
-            out = result("Бонусы", "Награда за первую завершённую сделку.", [btn(label, "bonus_claim", True), *BACK], body)
+            out = result("Бонусы", "Награда за первую завершённую сделку.", [btn(label, "bonus_claim", True, True), *BACK], body)
         elif data == "bonus_claim":
             with db() as c:
                 r = c.execute("SELECT bonus_claimed FROM users WHERE user_id=?", (uid,)).fetchone()
@@ -252,7 +332,7 @@ async def widget_action(upd):
         elif data == "about":
             out = result("О сервисе", "FunPay — интерфейс для создания сделок с NFT и управления балансом. Все операции доступны в Telegram.", BACK)
         elif data == "support":
-            out = result("Поддержка", "Опишите проблему и укажите код сделки, если он есть.", [btn("Написать оператору", "support_write", True), *BACK])
+            out = result("Поддержка", "Опишите проблему и укажите код сделки, если он есть.", [btn("Написать оператору", "support_write", True, True), *BACK])
         elif data == "support_write":
             await prompt(uid, "Напишите сообщение для поддержки следующим сообщением.", "support_message")
             out = result("Сообщение в поддержку", "Жду ваше сообщение в чате.", BACK)
@@ -291,11 +371,11 @@ async def admin_widget_action(uid, data):
     if data == "work:list":
         with db() as c: rows = c.execute("SELECT id,code,status,amount,currency FROM deals ORDER BY id DESC LIMIT 10").fetchall()
         buttons = [btn(f"#{r['id']} {r['code']} · {r['status']}", f"work:open:{r['id']}") for r in rows]
-        return result("Управление сделками", "Последние 10 сделок", [*buttons, btn("На главную", "home")])
+        return result("Управление сделками", "Последние 10 сделок", [*buttons, btn("На главную", "home", wide=True)])
     if data.startswith("work:open:"):
         did = int(data.split(":")[-1])
         with db() as c: d = c.execute("SELECT * FROM deals WHERE id=?", (did,)).fetchone()
-        if not d: return result("Ошибка", "Сделка не найдена.", [btn("Назад", "work:list")])
+        if not d: return result("Ошибка", "Сделка не найдена.", [btn("Назад", "work:list", wide=True)])
         return result(f"Сделка #{did}", f"{d['code']} • {d['status']}\nПродавец: {d['creator_id']}\nПокупатель: {d['payer_id'] or '—'}\nNFT: {d['gift_url']}\nСумма: {fmt(d['amount'])} {cname(d['currency'])}",
           [btn("Оплатить", f"work:pay:{did}", True), btn("Отменить", f"work:cancel:{did}"), btn("Удалить", f"work:delete:{did}"), btn("Назад", "work:list")])
     if data.startswith("work:pay:"):
@@ -306,7 +386,7 @@ async def admin_widget_action(uid, data):
             if d["creator_id"] == uid: raise ValueError("Нельзя оплатить свою сделку.")
             c.execute("UPDATE deals SET status='paid',payer_id=?,paid_at=? WHERE id=? AND status='pending'", (uid, now_iso(), did)); c.commit()
         await send_message(d["creator_id"], f"Администратор оплатил сделку {d['code']}.")
-        return result("Готово", "Сделка помечена оплаченной (без списания баланса).", [btn("К списку", "work:list")])
+        return result("Готово", "Сделка помечена оплаченной (без списания баланса).", [btn("К списку", "work:list", wide=True)])
     if data.startswith("work:cancel:"):
         did = int(data.split(":")[-1])
         with db() as c:
@@ -317,7 +397,7 @@ async def admin_widget_action(uid, data):
                 c.execute(f"UPDATE users SET {bcol(d['currency'])}={bcol(d['currency'])}+? WHERE user_id=?", (d["amount"], d["payer_id"]))
                 c.execute("INSERT INTO operations(user_id,kind,amount,currency,deal_id,created_at) VALUES(?,?,?,?,?,?)", (d["payer_id"], "deal_refund", d["amount"], d["currency"], did, now_iso()))
             c.execute("UPDATE deals SET status='cancelled' WHERE id=?", (did,)); c.commit()
-        return result("Сделка отменена", "Статус обновлён.", [btn("К списку", "work:list")])
+        return result("Сделка отменена", "Статус обновлён.", [btn("К списку", "work:list", wide=True)])
     if data.startswith("work:delete:"):
         did = int(data.split(":")[-1])
         with db() as c:
@@ -325,7 +405,7 @@ async def admin_widget_action(uid, data):
             if not d: raise ValueError("Сделка не найдена.")
             if d["status"] == "confirmed": raise ValueError("Подтверждённую сделку удалять нельзя.")
             c.execute("DELETE FROM deals WHERE id=?", (did,)); c.execute("DELETE FROM operations WHERE deal_id=?", (did,)); c.execute("DELETE FROM balance_holds WHERE deal_id=?", (did,)); c.commit()
-        return result("Удалено", "Сделка удалена.", [btn("К списку", "work:list")])
+        return result("Удалено", "Сделка удалена.", [btn("К списку", "work:list", wide=True)])
     return result("Админ-панель", "Команда не найдена.", [btn("Сделки", "work:list"), *BACK])
 
 async def handle_text(m):
@@ -435,7 +515,7 @@ async def handle_text(m):
             c.commit()
         states.pop(uid, None)
         await clear_temp(uid)
-        await send_message(uid, f"🔷 СДЕЛКА FUNPAY\n{state['gift']}\n{fmt(int(text))} ₽\nКод: {code}\nПередайте код покупателю командой /p {code}.")
+        await send_message(uid, f"СДЕЛКА FUNPAY\n{state['gift']}\n{fmt(int(text))} ₽\nКод: {code}\nПередайте код покупателю командой /p {code}.")
         return
     if isinstance(state, str) and state == "support_message":
         with db() as c:
